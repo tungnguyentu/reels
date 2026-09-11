@@ -1,0 +1,133 @@
+"""Command line entry point (U5).
+
+`reels index` builds the embedding cache. `reels clip` runs the whole pipeline and
+indexes on demand, so the first run on a recording is the only slow one.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+from . import ReelsError, search
+from . import index as index_mod
+from . import judge as judge_mod
+from . import render as render_mod
+
+DEFAULT_MUSIC_DIR = Path.home() / "Videos"
+DEFAULT_OUT_DIR = Path("out")
+
+
+def _say(message: str) -> None:
+    print(message, file=sys.stderr, flush=True)
+
+
+def cmd_index(args: argparse.Namespace) -> int:
+    video = Path(args.video)
+    if index_mod.is_fresh(video) and not args.force:
+        existing = index_mod.load_index(video)
+        _say(f"already indexed: {len(existing.embeddings)} keyframes")
+        return 0
+    _say(f"indexing {video.name} (first run on a long recording takes a few minutes)")
+    built = index_mod.build_index(video, force=args.force)
+    _say(f"indexed {len(built.embeddings)} keyframes -> {index_mod.index_path(video).name}")
+    return 0
+
+
+def cmd_clip(args: argparse.Namespace) -> int:
+    video = Path(args.video)
+    if not index_mod.is_fresh(video):
+        _say(f"indexing {video.name} (one-time, a few minutes on a long recording)")
+    built = index_mod.build_index(video)
+
+    found = search.candidates(
+        built,
+        args.query,
+        min_seconds=args.min_seconds,
+        max_seconds=args.max_seconds,
+        shortlist=args.shortlist,
+        floor=args.floor,
+    )
+    if not found:
+        _say(f'nothing in {video.name} matches "{args.query}" -- no candidates to judge.')
+        return 0
+
+    _say(f"{len(found)} candidate ranges; asking the vision model about each")
+    accepted: list[tuple[search.Candidate, judge_mod.Verdict]] = []
+    rejected: list[str] = []
+    errored: list[str] = []
+    for candidate in found:
+        span = f"{candidate.start:.0f}-{candidate.end:.0f}s"
+        try:
+            verdict = judge_mod.judge(video, candidate, args.query)
+        except ReelsError as exc:
+            # One failed range does not throw away the ranges that already succeeded.
+            errored.append(f"  {span}: {exc}")
+            continue
+        if verdict.accepted:
+            accepted.append((candidate, verdict))
+            _say(f"  {span}: accepted ({verdict.reframe})")
+        else:
+            rejected.append(f"  {span}: {verdict.reason}")
+
+    if not accepted:
+        _say(f'no usable clip for "{args.query}" in {video.name}.')
+        if rejected:
+            _say(f"rejected {len(rejected)}:")
+            for line in rejected:
+                _say(line)
+        if errored:
+            _say(f"errored {len(errored)}:")
+            for line in errored:
+                _say(line)
+        return 0
+
+    for candidate, verdict in accepted:
+        written = render_mod.render(
+            video, candidate, verdict, args.query,
+            music_dir=Path(args.music_dir), out_dir=Path(args.out_dir),
+        )
+        print(written)
+
+    if errored:
+        _say(f"{len(errored)} range(s) could not be judged:")
+        for line in errored:
+            _say(line)
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="reels", description=__doc__.splitlines()[0])
+    subs = parser.add_subparsers(dest="command", required=True)
+
+    index_cmd = subs.add_parser("index", help="build the embedding cache for a recording")
+    index_cmd.add_argument("video")
+    index_cmd.add_argument("--force", action="store_true", help="re-index even if current")
+    index_cmd.set_defaults(func=cmd_index)
+
+    clip_cmd = subs.add_parser("clip", help="cut Reels matching a text query")
+    clip_cmd.add_argument("video")
+    clip_cmd.add_argument("query")
+    clip_cmd.add_argument("--min-seconds", type=float, default=search.DEFAULT_MIN_SECONDS)
+    clip_cmd.add_argument("--max-seconds", type=float, default=search.DEFAULT_MAX_SECONDS)
+    clip_cmd.add_argument("--shortlist", type=int, default=search.DEFAULT_SHORTLIST)
+    clip_cmd.add_argument("--floor", type=float, default=search.DEFAULT_FLOOR,
+                          help="minimum peak similarity before any range is emitted")
+    clip_cmd.add_argument("--music-dir", default=str(DEFAULT_MUSIC_DIR))
+    clip_cmd.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
+    clip_cmd.set_defaults(func=cmd_clip)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        return args.func(args)
+    except ReelsError as exc:
+        _say(f"error: {exc}")
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
