@@ -10,14 +10,13 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-from . import ReelsError
+from . import ReelsError, run_tool
 from .search import Candidate
 
 API_KEY_ENV = "GEMINI_API_KEY"
@@ -76,14 +75,14 @@ class Verdict:
 
 
 def _grab_frame(video: Path, at: float) -> bytes:
-    proc = subprocess.run(
+    jpeg = run_tool(
         ["ffmpeg", "-v", "error", "-ss", f"{at:.3f}", "-i", str(video), "-frames:v", "1",
          "-vf", f"scale={SAMPLE_WIDTH}:-2", "-f", "image2", "-c:v", "mjpeg", "-"],
-        capture_output=True, check=False,
+        text=False, what=f"reading a frame at {at:.1f}s from {video.name}",
     )
-    if proc.returncode != 0 or not proc.stdout:
-        raise ReelsError(f"could not read a frame at {at:.1f}s from {video.name}")
-    return proc.stdout
+    if not jpeg:
+        raise ReelsError(f"no frame at {at:.1f}s in {video.name}")
+    return jpeg
 
 
 def sample_frames(video: Path, candidate: Candidate, count: int = FRAMES_PER_RANGE) -> list[bytes]:

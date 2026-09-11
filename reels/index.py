@@ -8,19 +8,20 @@ boundary needs -- see KTD1 in the plan.
 from __future__ import annotations
 
 import shutil
-import subprocess
 import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 
-from . import ReelsError
+from . import ReelsError, run_tool
 
 KEYFRAME_SIZE = 224
 MODEL_NAME = "ViT-B-32"
 PRETRAINED = "laion2b_s34b_b79k"
+KEYFRAME_JPEG_QUALITY = "3"  # ffmpeg -q:v, 2-31 with 2 best
 
 Encoder = Callable[[Sequence[Path]], np.ndarray]
 
@@ -45,21 +46,13 @@ def is_fresh(video: Path | str) -> bool:
     return cache.stat().st_mtime_ns >= source.stat().st_mtime_ns
 
 
-def _run(cmd: list[str]) -> str:
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    if proc.returncode != 0:
-        detail = proc.stderr.strip().splitlines()
-        raise ReelsError(f"{cmd[0]} failed: {detail[-1] if detail else proc.returncode}")
-    return proc.stdout
-
-
 def keyframe_timestamps(video: Path) -> np.ndarray:
     """Presentation timestamps of the source's keyframes.
 
     The image2 muxer carries no timestamps into the files extract_keyframes writes, so
     this is a separate pass and the two are paired by ordinal.
     """
-    out = _run([
+    out = run_tool([
         "ffprobe", "-v", "error", "-select_streams", "v", "-skip_frame", "nokey",
         "-show_entries", "frame=pts_time", "-of", "csv=p=0", str(video),
     ])
@@ -71,10 +64,10 @@ def keyframe_timestamps(video: Path) -> np.ndarray:
 
 def extract_keyframes(video: Path, dest: Path) -> list[Path]:
     dest.mkdir(parents=True, exist_ok=True)
-    _run([
+    run_tool([
         "ffmpeg", "-v", "error", "-skip_frame", "nokey", "-i", str(video),
         "-vf", f"scale={KEYFRAME_SIZE}:{KEYFRAME_SIZE}", "-fps_mode", "passthrough",
-        "-q:v", "3", str(dest / "%06d.jpg"), "-y",
+        "-q:v", KEYFRAME_JPEG_QUALITY, str(dest / "%06d.jpg"), "-y",
     ])
     frames = sorted(dest.glob("*.jpg"))
     if not frames:
@@ -82,7 +75,10 @@ def extract_keyframes(video: Path, dest: Path) -> list[Path]:
     return frames
 
 
+@lru_cache(maxsize=1)
 def _load_model():
+    """Cached: a first-run `reels clip` embeds images then encodes the query, and
+    rebuilding the same checkpoint for the second call costs seconds and ~600 MB."""
     import open_clip
     import torch
 

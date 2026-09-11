@@ -10,10 +10,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import subprocess
 from pathlib import Path
 
-from . import ReelsError
+from . import ReelsError, run_tool
 from .judge import CROP, PILLARBOX, Verdict
 from .search import Candidate
 
@@ -22,6 +21,10 @@ OUTPUT_HEIGHT = 1920
 OUTPUT_FPS = 30  # inside the range both Instagram Reels and YouTube Shorts accept
 FADE_SECONDS = 1.5
 BLUR_SIGMA = 40
+VIDEO_CRF = "20"
+VIDEO_PRESET = "medium"
+AUDIO_BITRATE = "192k"
+LIMITER_CEILING = 0.9
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".flac", ".wav", ".ogg", ".opus", ".aac"}
 
 
@@ -47,14 +50,12 @@ def pick_track(tracks: list[Path], seed: str) -> Path:
 
 
 def probe_size(video: Path) -> tuple[int, int]:
-    proc = subprocess.run(
+    out = run_tool(
         ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
          "stream=width,height", "-of", "json", str(video)],
-        capture_output=True, text=True, check=False,
+        what=f"reading the dimensions of {Path(video).name}",
     )
-    if proc.returncode != 0:
-        raise ReelsError(f"could not read dimensions of {Path(video).name}")
-    stream = json.loads(proc.stdout)["streams"][0]
+    stream = json.loads(out)["streams"][0]
     return int(stream["width"]), int(stream["height"])
 
 
@@ -120,21 +121,22 @@ def render(
     fade_start = max(0.0, duration - FADE_SECONDS)
     destination = output_path(Path(out_dir), video, query, candidate.start)
 
-    proc = subprocess.run(
-        ["ffmpeg", "-v", "error",
+    command = [
+        "ffmpeg", "-v", "error",
          "-ss", f"{candidate.start:.3f}", "-t", f"{duration:.3f}", "-i", str(video),
          "-stream_loop", "-1", "-i", str(track),
          "-filter_complex", video_filter(verdict, source_width, source_height),
          "-map", "[v]", "-map", "1:a",
-         "-af", f"afade=t=out:st={fade_start:.3f}:d={FADE_SECONDS},alimiter=limit=0.9",
+         "-af", (f"afade=t=out:st={fade_start:.3f}:d={FADE_SECONDS},"
+                 f"alimiter=limit={LIMITER_CEILING}"),
          "-t", f"{duration:.3f}",
-         "-r", str(OUTPUT_FPS), "-c:v", "libx264", "-crf", "20", "-preset", "medium",
-         "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
-         str(destination), "-y"],
-        capture_output=True, text=True, check=False,
-    )
-    if proc.returncode != 0:
+         "-r", str(OUTPUT_FPS), "-c:v", "libx264", "-crf", VIDEO_CRF, "-preset", VIDEO_PRESET,
+         "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", AUDIO_BITRATE,
+         str(destination), "-y",
+    ]
+    try:
+        run_tool(command, what="rendering")
+    except ReelsError:
         destination.unlink(missing_ok=True)
-        detail = proc.stderr.strip().splitlines()
-        raise ReelsError(f"rendering failed: {detail[-1] if detail else proc.returncode}")
+        raise
     return destination
