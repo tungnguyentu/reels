@@ -79,3 +79,12 @@ def test_shortlist_caps_the_returned_count():
     found = run(make_index(scores), shortlist=3)
     assert len(found) == 3
     assert found == sorted(found, key=lambda c: c.peak, reverse=True)
+
+
+def test_default_floor_sits_between_present_and_absent_queries():
+    """Calibrated at U2's checkpoint against the reference recording.
+
+    Present queries peaked 0.2183-0.3172 there; absent ones 0.1204-0.1637. A floor
+    outside that gap either rejects real matches or admits queries with nothing behind them.
+    """
+    assert 0.1637 < search.DEFAULT_FLOOR < 0.2183

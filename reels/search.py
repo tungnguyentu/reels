@@ -18,7 +18,8 @@ from .index import Index, encode_text
 DEFAULT_MIN_SECONDS = 15.0
 DEFAULT_MAX_SECONDS = 45.0
 DEFAULT_SHORTLIST = 20
-DEFAULT_FLOOR = 0.22  # calibrated against the reference recording; see U2's checkpoint
+DEFAULT_FLOOR = 0.19  # see U2's checkpoint: present queries peak 0.218-0.317 on the
+# reference recording, absent ones 0.120-0.164; this is the midpoint of that gap.
 SMOOTH_FRAMES = 3
 BASELINE_PERCENTILE = 10  # robust floor of this query's own range
 CEILING_PERCENTILE = 99  # robust top, ignoring a single freak frame
