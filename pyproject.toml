@@ -1,0 +1,28 @@
+[project]
+name = "reels"
+version = "0.1.0"
+description = "Turn long Minecraft recordings into 9:16 Reels from a text query"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2.0",
+    "open-clip-torch>=2.24",
+    "torch>=2.4",
+    "pillow>=10.0",
+    "google-genai>=1.0",
+]
+
+[project.scripts]
+reels = "reels.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
