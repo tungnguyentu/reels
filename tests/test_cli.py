@@ -125,3 +125,47 @@ def test_index_command_reports_and_is_idempotent(fixture_video, stub_pipeline, c
     assert "indexed" in capsys.readouterr().err
     assert cli.main(["index", str(fixture_video)]) == 0
     assert "already indexed" in capsys.readouterr().err
+
+
+def test_every_candidate_erroring_exits_nonzero(
+    fixture_video, music_dir, tmp_path, stub_pipeline, monkeypatch, capsys
+):
+    """An unset API key or no network is a failed run, not a recording that happens to
+    contain nothing -- exiting 0 tells a caller the clip search genuinely came up empty."""
+    from reels import ReelsError
+
+    def no_key(*_a, **_k):
+        raise ReelsError("GEMINI_API_KEY is not set.")
+
+    monkeypatch.setattr(judge_mod, "judge", no_key)
+    assert cli.main(clip_args(fixture_video, music_dir, tmp_path, floor=0.0, min_seconds=0.0)) == 1
+    assert "GEMINI_API_KEY" in capsys.readouterr().err
+
+
+def test_missing_music_dir_fails_before_any_judge_call(
+    fixture_video, tmp_path, stub_pipeline, monkeypatch, capsys
+):
+    def explode(*_a, **_k):
+        raise AssertionError("spent a vision-model call before validating the music dir")
+
+    monkeypatch.setattr(judge_mod, "judge", explode)
+    argv = clip_args(fixture_video, tmp_path / "absent", tmp_path, floor=0.0, min_seconds=0.0)
+    assert cli.main(argv) == 1
+    assert "music directory not found" in capsys.readouterr().err
+
+
+def test_index_force_rebuilds(fixture_video, stub_pipeline, capsys):
+    assert cli.main(["index", str(fixture_video)]) == 0
+    capsys.readouterr()
+    assert cli.main(["index", str(fixture_video), "--force"]) == 0
+    err = capsys.readouterr().err
+    assert "indexed" in err and "already indexed" not in err
+
+
+def test_empty_result_reports_the_observed_peak(
+    fixture_video, music_dir, tmp_path, stub_pipeline, capsys
+):
+    """'Nothing matched' is only trustworthy if it says how close it came -- the floor is
+    sensitive to query phrasing, so the operator needs the number to judge it."""
+    assert cli.main(clip_args(fixture_video, music_dir, tmp_path, floor=1.5)) == 0
+    assert "below the 1.5 floor" in capsys.readouterr().err

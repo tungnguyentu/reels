@@ -27,6 +27,7 @@ SAMPLE_WIDTH = 768
 
 CROP = "crop"
 PILLARBOX = "pillarbox"
+DEFAULT_FOCAL_X = 0.5  # the only place this default lives
 
 Asker = Callable[[Sequence[bytes], str], dict]
 
@@ -133,9 +134,15 @@ def _to_verdict(payload: object) -> Verdict:
     focal_x, reframe = payload.get("focal_x"), payload.get("reframe")
     if reframe not in (CROP, PILLARBOX):
         raise ReelsError(f"the vision model accepted a span without a usable reframe mode: {payload!r}")
-    if reframe == CROP and not isinstance(focal_x, (int, float)):
-        raise ReelsError(f"the vision model chose a crop without a focal point: {payload!r}")
-    return Verdict(True, reason, float(min(1.0, max(0.0, focal_x or 0.5))), reframe)
+    if focal_x is None:
+        if reframe == CROP:
+            raise ReelsError(f"the vision model chose a crop without a focal point: {payload!r}")
+        focal_x = DEFAULT_FOCAL_X
+    elif not isinstance(focal_x, (int, float)) or isinstance(focal_x, bool):
+        # Checked on both paths: a non-numeric focal_x used to reach the clamp on the
+        # pillarbox branch and raise a bare TypeError, losing every range already judged.
+        raise ReelsError(f"the vision model returned a non-numeric focal point: {payload!r}")
+    return Verdict(True, reason, float(min(1.0, max(0.0, focal_x))), reframe)
 
 
 def judge(video: Path, candidate: Candidate, query: str, *, ask: Asker | None = None) -> Verdict:

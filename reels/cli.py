@@ -41,6 +41,10 @@ def cmd_clip(args: argparse.Namespace) -> int:
         _say(f"indexing {video.name} (one-time, a few minutes on a long recording)")
     built = index_mod.build_index(video)
 
+    # Fail fast on a bad music directory: validating it inside render would spend every
+    # vision-model call first, then stop on something knowable before any of them.
+    tracks = render_mod.music_tracks(Path(args.music_dir))
+
     found = search.candidates(
         built,
         args.query,
@@ -50,10 +54,15 @@ def cmd_clip(args: argparse.Namespace) -> int:
         floor=args.floor,
     )
     if not found:
+        peak = float(search.score(built, args.query).max())
         _say(f'nothing in {video.name} matches "{args.query}" -- no candidates to judge.')
+        _say(f"  best match scored {peak:.4f}, below the {args.floor} floor.")
+        if peak >= args.floor * 0.85:
+            _say("  that is close -- try a shorter query, or lower --floor.")
         return 0
 
-    _say(f"{len(found)} candidate ranges; asking the vision model about each")
+    _say(f"{len(found)} candidate ranges ({len(tracks)} music tracks); "
+         f"asking the vision model about each")
     accepted: list[tuple[search.Candidate, judge_mod.Verdict]] = []
     rejected: list[str] = []
     errored: list[str] = []
@@ -81,7 +90,9 @@ def cmd_clip(args: argparse.Namespace) -> int:
             _say(f"errored {len(errored)}:")
             for line in errored:
                 _say(line)
-        return 0
+        # Every range failing to be judged (an unset API key, no network) is a failed run,
+        # not a recording that happens to contain nothing.
+        return 1 if errored and not rejected else 0
 
     for candidate, verdict in accepted:
         written = render_mod.render(

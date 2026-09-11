@@ -59,13 +59,22 @@ def probe_size(video: Path) -> tuple[int, int]:
     return int(stream["width"]), int(stream["height"])
 
 
-def crop_window(source_width: int, source_height: int, focal_x: float) -> tuple[int, int]:
-    """A 9:16 window centred on focal_x, clamped inside the frame. Returns (width, x)."""
+def crop_window(
+    source_width: int, source_height: int, focal_x: float
+) -> tuple[int, int, int, int]:
+    """A 9:16 window centred on focal_x, clamped inside the frame. Returns (w, h, x, y).
+
+    Height is computed too. A source taller than 9:16 cannot give a full-height window
+    of the right shape, and cropping full-frame then scaling would stretch the picture
+    rather than fail -- silently wrong output is worse than a narrower crop.
+    """
     width = min(source_width, round(source_height * OUTPUT_WIDTH / OUTPUT_HEIGHT))
+    height = min(source_height, round(width * OUTPUT_HEIGHT / OUTPUT_WIDTH))
     width -= width % 2
-    centre = focal_x * source_width
-    x = round(centre - width / 2)
-    return width, max(0, min(x, source_width - width))
+    height -= height % 2
+    x = round(focal_x * source_width - width / 2)
+    y = round((source_height - height) / 2)
+    return width, height, max(0, min(x, source_width - width)), max(0, min(y, source_height - height))
 
 
 def video_filter(verdict: Verdict, source_width: int, source_height: int) -> str:
@@ -79,9 +88,9 @@ def video_filter(verdict: Verdict, source_width: int, source_height: int) -> str
         )
     if verdict.reframe != CROP:
         raise ReelsError(f"cannot reframe without a mode: {verdict!r}")
-    width, x = crop_window(source_width, source_height, verdict.focal_x or 0.5)
+    width, height, x, y = crop_window(source_width, source_height, verdict.focal_x)
     return (
-        f"[0:v]crop={width}:{source_height}:{x}:0,"
+        f"[0:v]crop={width}:{height}:{x}:{y},"
         f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}[v]"
     )
 
@@ -136,7 +145,9 @@ def render(
     ]
     try:
         run_tool(command, what="rendering")
-    except ReelsError:
+    except BaseException:
+        # BaseException, not ReelsError: Ctrl-C mid-encode would otherwise leave a
+        # truncated .mp4 that the collision-avoiding suffix never overwrites.
         destination.unlink(missing_ok=True)
         raise
     return destination

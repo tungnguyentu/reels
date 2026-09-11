@@ -6,11 +6,13 @@ from reels import search
 from reels.index import Index
 
 
-def make_index(scores, stride=2.0):
+def make_index(scores, stride=2.0, timestamps=None):
     """An index whose single-dimension embeddings dot to exactly `scores` against [1.0]."""
     scores = np.asarray(scores, dtype=np.float32).reshape(-1, 1)
-    timestamps = np.arange(len(scores), dtype=np.float64) * stride
-    return Index(scores, timestamps)
+    if timestamps is None:
+        timestamps = np.arange(len(scores), dtype=np.float64) * stride
+    timestamps = np.asarray(timestamps, dtype=np.float64)
+    return Index(scores, timestamps, float(timestamps[-1] + stride))
 
 
 def unit_query(_query):
@@ -88,3 +90,36 @@ def test_default_floor_sits_between_present_and_absent_queries():
     outside that gap either rejects real matches or admits queries with nothing behind them.
     """
     assert 0.1637 < search.DEFAULT_FLOOR < 0.2183
+
+
+def test_max_seconds_holds_on_a_variable_gop_recording():
+    """Length is a promise in seconds. Enforcing it as a keyframe count assumes uniform
+    spacing, so on a recording whose calm stretches have long gaps a `--max-seconds 45`
+    request returns a clip twice that long."""
+    # Median stride 2s, but the matching stretch has 8s gaps between keyframes.
+    times = list(np.arange(0, 40, 2.0)) + list(np.arange(40, 140, 8.0)) + list(np.arange(140, 180, 2.0))
+    scores = [0.1] * 20 + [0.9] * 13 + [0.1] * 20
+    found = run(make_index(scores, timestamps=times), max_seconds=45.0, min_seconds=10.0)
+    assert found
+    for candidate in found:
+        assert candidate.duration <= 45.0 + 1e-6
+
+
+def test_flat_curve_returns_nothing_rather_than_the_first_window():
+    """A query that discriminates nothing gives a zero-span range, where enter == exit
+    and every frame qualifies -- the honest answer is 'no match', not the opening shot."""
+    assert run(make_index([0.5] * 60)) == []
+
+
+def test_a_long_matching_stretch_yields_several_candidates():
+    """A whole session of good footage should give the judge a shortlist to choose from,
+    not a single window with the rest discarded."""
+    found = run(make_index([0.1] * 5 + [0.9] * 200 + [0.1] * 5), max_seconds=40.0, min_seconds=10.0)
+    assert len(found) > 1
+    assert all(c.duration <= 40.0 + 1e-6 for c in found)
+
+
+def test_ranges_never_extend_past_the_end_of_the_recording():
+    idx = make_index([0.1] * 10 + [0.9] * 20)
+    for candidate in run(idx):
+        assert candidate.end <= idx.duration + 1e-6

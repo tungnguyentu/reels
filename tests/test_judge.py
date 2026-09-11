@@ -34,20 +34,35 @@ def test_accepted_span_returns_focal_x_in_range(fixture_video):
     assert 0.0 <= verdict.focal_x <= 1.0
 
 
-def test_out_of_range_focal_x_is_clamped(fixture_video):
-    verdict = judge_mod.judge(
-        fixture_video, SPAN, "forest",
-        ask=asker({"accepted": True, "reason": "ok", "focal_x": 1.8, "reframe": "crop"}),
-    )
-    assert verdict.focal_x == 1.0
-
-
-def test_accepted_span_returns_exactly_one_reframe_mode(fixture_video):
+def test_pillarbox_verdict_needs_no_focal_point_and_defaults_to_centre(fixture_video):
     verdict = judge_mod.judge(
         fixture_video, SPAN, "forest",
         ask=asker({"accepted": True, "reason": "needs full width", "reframe": "pillarbox"}),
     )
-    assert verdict.reframe in (judge_mod.CROP, judge_mod.PILLARBOX)
+    assert verdict.reframe == judge_mod.PILLARBOX
+    assert verdict.focal_x == judge_mod.DEFAULT_FOCAL_X
+
+
+@pytest.mark.parametrize("given,expected", [(0.0, 0.0), (1.0, 1.0), (-0.4, 0.0), (1.8, 1.0)])
+def test_focal_x_boundaries_are_clamped_not_defaulted(fixture_video, given, expected):
+    """0.0 is a legitimate focal point -- the far left edge. A falsy-zero fallback would
+    silently recentre the crop and throw away the subject the model actually pointed at."""
+    verdict = judge_mod.judge(
+        fixture_video, SPAN, "forest",
+        ask=asker({"accepted": True, "reason": "ok", "focal_x": given, "reframe": "crop"}),
+    )
+    assert verdict.focal_x == expected
+
+
+@pytest.mark.parametrize("mode", ["crop", "pillarbox"])
+def test_non_numeric_focal_x_is_a_reels_error_on_both_paths(fixture_video, mode):
+    """On the pillarbox path this used to reach the clamp and raise a bare TypeError,
+    which escapes the per-range handler and discards every range already accepted."""
+    with pytest.raises(ReelsError, match="non-numeric"):
+        judge_mod.judge(
+            fixture_video, SPAN, "forest",
+            ask=asker({"accepted": True, "reason": "ok", "focal_x": "left", "reframe": mode}),
+        )
 
 
 def test_near_field_closeup_is_rejected(fixture_video):

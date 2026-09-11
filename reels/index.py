@@ -7,6 +7,7 @@ boundary needs -- see KTD1 in the plan.
 
 from __future__ import annotations
 
+import json
 import shutil
 import tempfile
 from collections.abc import Callable, Sequence
@@ -19,9 +20,9 @@ import numpy as np
 from . import ReelsError, run_tool
 
 KEYFRAME_SIZE = 224
+KEYFRAME_JPEG_QUALITY = "3"  # ffmpeg -q:v, 2-31 with 2 best
 MODEL_NAME = "ViT-B-32"
 PRETRAINED = "laion2b_s34b_b79k"
-KEYFRAME_JPEG_QUALITY = "3"  # ffmpeg -q:v, 2-31 with 2 best
 
 Encoder = Callable[[Sequence[Path]], np.ndarray]
 
@@ -31,43 +32,94 @@ class Index:
     """One row per keyframe. Embeddings are L2-normalised, so cosine similarity is a dot product."""
 
     embeddings: np.ndarray  # (n, d) float32
-    timestamps: np.ndarray  # (n,) float64 seconds into the source
+    timestamps: np.ndarray  # (n,) float64 seconds from the start of playback
+    duration: float = 0.0  # seconds; 0.0 when the source duration was unreadable
 
 
 def index_path(video: Path | str) -> Path:
     return Path(f"{video}.reels.npz")
 
 
+def probe_times(video: Path | str) -> tuple[float, float]:
+    """(start_time, duration) of the video stream, in seconds.
+
+    Keyframe timestamps come back as absolute presentation times, but `ffmpeg -ss`
+    counts from the stream's start_time. On a container with a nonzero start_time the
+    two disagree and every cut lands late, so the offset is removed at index time.
+    """
+    raw = run_tool([
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=start_time", "-show_entries", "format=duration",
+        "-of", "json", str(video),
+    ])
+
+    def number(value: object) -> float:
+        try:
+            return float(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return 0.0  # ffprobe reports "N/A" for some containers
+
+    parsed = json.loads(raw)
+    streams = parsed.get("streams") or [{}]
+    return number(streams[0].get("start_time")), number(parsed.get("format", {}).get("duration"))
+
+
 def is_fresh(video: Path | str) -> bool:
+    """True when the cache can still be trusted for this source and this model.
+
+    Size is checked alongside mtime because a restore or copy that preserves mtime
+    (`cp -p`, `rsync -t`, archive extraction) would otherwise keep a stale index. The
+    model identity is checked because embeddings from a different checkpoint live in a
+    different space: scoring against them returns confident nonsense, not an error.
+    """
     cache = index_path(video)
     source = Path(video)
     if not cache.is_file() or not source.is_file():
         return False
-    return cache.stat().st_mtime_ns >= source.stat().st_mtime_ns
+    if cache.stat().st_mtime_ns < source.stat().st_mtime_ns:
+        return False
+    try:
+        with np.load(cache) as data:
+            return (
+                str(data["model"]) == MODEL_NAME
+                and str(data["pretrained"]) == PRETRAINED
+                and int(data["source_size"]) == source.stat().st_size
+            )
+    except (KeyError, OSError, ValueError, EOFError):
+        return False  # unreadable or written by an older version -- rebuild
 
 
-def keyframe_timestamps(video: Path) -> np.ndarray:
-    """Presentation timestamps of the source's keyframes.
+def keyframe_timestamps(video: Path, start_time: float = 0.0) -> np.ndarray:
+    """Keyframe times relative to the start of playback.
 
     The image2 muxer carries no timestamps into the files extract_keyframes writes, so
     this is a separate pass and the two are paired by ordinal.
     """
     out = run_tool([
-        "ffprobe", "-v", "error", "-select_streams", "v", "-skip_frame", "nokey",
+        "ffprobe", "-v", "error", "-select_streams", "v:0", "-skip_frame", "nokey",
         "-show_entries", "frame=pts_time", "-of", "csv=p=0", str(video),
     ])
-    times = [float(t) for t in (ln.strip().rstrip(",") for ln in out.splitlines()) if t]
+    times = []
+    for line in out.splitlines():
+        text = line.strip().rstrip(",")
+        if not text:
+            continue
+        try:
+            times.append(float(text))
+        except ValueError:
+            raise ReelsError(f"ffprobe reported an unreadable keyframe time in {video}: {text!r}") from None
     if not times:
         raise ReelsError(f"no keyframes found in {video}")
-    return np.asarray(times, dtype=np.float64)
+    return np.asarray(times, dtype=np.float64) - start_time
 
 
 def extract_keyframes(video: Path, dest: Path) -> list[Path]:
     dest.mkdir(parents=True, exist_ok=True)
     run_tool([
         "ffmpeg", "-v", "error", "-skip_frame", "nokey", "-i", str(video),
-        "-vf", f"scale={KEYFRAME_SIZE}:{KEYFRAME_SIZE}", "-fps_mode", "passthrough",
-        "-q:v", KEYFRAME_JPEG_QUALITY, str(dest / "%06d.jpg"), "-y",
+        "-map", "0:v:0", "-vf", f"scale={KEYFRAME_SIZE}:{KEYFRAME_SIZE}",
+        "-fps_mode", "passthrough", "-q:v", KEYFRAME_JPEG_QUALITY,
+        str(dest / "%06d.jpg"), "-y",
     ])
     frames = sorted(dest.glob("*.jpg"))
     if not frames:
@@ -124,7 +176,8 @@ def load_index(video: Path | str) -> Index:
     if not cache.is_file():
         raise ReelsError(f"no index for {video} -- run `reels index` first")
     with np.load(cache) as data:
-        return Index(data["embeddings"], data["timestamps"])
+        duration = float(data["duration"]) if "duration" in data else 0.0
+        return Index(data["embeddings"], data["timestamps"], duration)
 
 
 def build_index(video: Path | str, *, encoder: Encoder | None = None, force: bool = False) -> Index:
@@ -135,7 +188,8 @@ def build_index(video: Path | str, *, encoder: Encoder | None = None, force: boo
     if not force and is_fresh(source):
         return load_index(source)
 
-    times = keyframe_timestamps(source)
+    start_time, duration = probe_times(source)
+    times = keyframe_timestamps(source, start_time)
     scratch = Path(tempfile.mkdtemp(prefix="reels-keyframes-"))
     try:
         frames = extract_keyframes(source, scratch)
@@ -150,8 +204,15 @@ def build_index(video: Path | str, *, encoder: Encoder | None = None, force: boo
 
     cache = index_path(source)
     staging = cache.with_suffix(".npz.partial")
-    # Write through a handle: np.savez appends ".npz" to a path that lacks it.
-    with staging.open("wb") as handle:
-        np.savez(handle, embeddings=embeddings, timestamps=times)
-    staging.replace(cache)
-    return Index(embeddings, times)
+    try:
+        # Write through a handle: np.savez appends ".npz" to a path that lacks it.
+        with staging.open("wb") as handle:
+            np.savez(
+                handle, embeddings=embeddings, timestamps=times, duration=duration,
+                model=MODEL_NAME, pretrained=PRETRAINED, source_size=source.stat().st_size,
+            )
+        staging.replace(cache)
+    except BaseException:
+        staging.unlink(missing_ok=True)
+        raise
+    return Index(embeddings, times, duration)
