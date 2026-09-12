@@ -110,9 +110,9 @@ class Throttled(Exception):
     code = 429
 
 
-def test_a_throttled_call_is_retried_and_succeeds():
-    """Free-tier keys allow ~10-15 requests a minute and one query asks about up to 20
-    ranges, so a throttle must not discard the range as unusable footage."""
+def test_a_transient_failure_is_retried_and_succeeds():
+    """A live free-tier run lost two of six ranges to 503 UNAVAILABLE. A temporary
+    provider blip must not discard the range as if the footage were unusable."""
     attempts = []
     naps = []
 
@@ -122,12 +122,12 @@ def test_a_throttled_call_is_retried_and_succeeds():
             raise Throttled("429 RESOURCE_EXHAUSTED")
         return "ok"
 
-    assert judge_mod._retrying_on_rate_limit(call, sleep=naps.append) == "ok"
+    assert judge_mod._retrying(call, sleep=naps.append) == "ok"
     assert len(attempts) == 3
-    assert naps == [judge_mod.RATE_LIMIT_BACKOFF, judge_mod.RATE_LIMIT_BACKOFF * 2]
+    assert naps == [judge_mod.RETRY_BACKOFF, judge_mod.RETRY_BACKOFF * 2]
 
 
-def test_a_persistent_throttle_gives_up_after_the_attempt_budget():
+def test_a_persistent_outage_gives_up_after_the_attempt_budget():
     attempts = []
 
     def call():
@@ -135,8 +135,8 @@ def test_a_persistent_throttle_gives_up_after_the_attempt_budget():
         raise Throttled("429")
 
     with pytest.raises(Throttled):
-        judge_mod._retrying_on_rate_limit(call, sleep=lambda _s: None)
-    assert len(attempts) == judge_mod.RATE_LIMIT_ATTEMPTS
+        judge_mod._retrying(call, sleep=lambda _s: None)
+    assert len(attempts) == judge_mod.RETRY_ATTEMPTS
 
 
 def test_a_real_failure_is_not_retried():
@@ -148,20 +148,28 @@ def test_a_real_failure_is_not_retried():
         raise ValueError("400 INVALID_ARGUMENT")
 
     with pytest.raises(ValueError):
-        judge_mod._retrying_on_rate_limit(call, sleep=lambda _s: None)
+        judge_mod._retrying(call, sleep=lambda _s: None)
     assert len(attempts) == 1
+
+
+class Unavailable(Exception):
+    """503 from shared free-tier capacity. A live run lost two of six ranges to this."""
+
+    code = 503
 
 
 @pytest.mark.parametrize("exc", [
     Throttled("boom"),                        # structural: code attribute
+    Unavailable("boom"),
     RuntimeError("429 Too Many Requests"),    # textual: status in the message
     RuntimeError("RESOURCE_EXHAUSTED"),
     RuntimeError("rate limit exceeded"),
+    RuntimeError("503 UNAVAILABLE. This model is currently experiencing high demand."),
 ])
-def test_rate_limits_are_recognised_structurally_and_textually(exc):
-    assert judge_mod._is_rate_limit(exc)
+def test_transient_failures_are_recognised_structurally_and_textually(exc):
+    assert judge_mod._is_transient(exc)
 
 
-@pytest.mark.parametrize("exc", [ValueError("400 bad request"), RuntimeError("timeout")])
-def test_other_errors_are_not_mistaken_for_rate_limits(exc):
-    assert not judge_mod._is_rate_limit(exc)
+@pytest.mark.parametrize("exc", [ValueError("400 bad request"), ValueError("401 unauthorized")])
+def test_real_failures_are_not_mistaken_for_transient_ones(exc):
+    assert not judge_mod._is_transient(exc)

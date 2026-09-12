@@ -22,11 +22,16 @@ from .search import Candidate
 
 API_KEY_ENV = "GEMINI_API_KEY"
 MODEL_ENV = "REELS_JUDGE_MODEL"
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-flash-latest"  # an alias, not a pinned id: a hardcoded version
+# goes stale silently and the failure only shows up as a dead run months later.
 FRAMES_PER_RANGE = 3
 SAMPLE_WIDTH = 768
-RATE_LIMIT_ATTEMPTS = 3
-RATE_LIMIT_BACKOFF = 4.0  # seconds before the first retry, doubling after that
+RETRY_ATTEMPTS = 3
+RETRY_BACKOFF = 4.0  # seconds before the first retry, doubling after that
+# Codes worth another attempt: throttling, and the server-side capacity errors a free
+# tier sees constantly ("this model is currently experiencing high demand").
+TRANSIENT_CODES = frozenset({429, 500, 502, 503, 504})
+TRANSIENT_MARKERS = ("429", "503", "RESOURCE_EXHAUSTED", "UNAVAILABLE", "RATE LIMIT")
 
 CROP = "crop"
 PILLARBOX = "pillarbox"
@@ -95,34 +100,37 @@ def sample_frames(video: Path, candidate: Candidate, count: int = FRAMES_PER_RAN
     return [_grab_frame(Path(video), float(t)) for t in times]
 
 
-def _is_rate_limit(exc: Exception) -> bool:
-    """Whether a provider error is a throttle rather than a real failure.
+def _is_transient(exc: Exception) -> bool:
+    """Whether a provider error is worth another attempt rather than a real failure.
 
-    Matched structurally where the client exposes a code, and by text otherwise, so a
-    client version that changes its exception classes does not silently turn a throttle
-    back into a discarded candidate.
+    Not just throttling. A live run against a free-tier key lost two of six ranges to
+    `503 UNAVAILABLE -- this model is currently experiencing high demand`, which is as
+    temporary as a 429 and far more common. Matched structurally where the client
+    exposes a code, and by status name otherwise, so a client version that renames its
+    exception classes does not silently turn a retryable blip into a dropped candidate.
     """
-    if (getattr(exc, "code", None) or getattr(exc, "status_code", None)) == 429:
+    if (getattr(exc, "code", None) or getattr(exc, "status_code", None)) in TRANSIENT_CODES:
         return True
     text = str(exc).upper()
-    return "429" in text or "RESOURCE_EXHAUSTED" in text or "RATE LIMIT" in text
+    return any(marker in text for marker in TRANSIENT_MARKERS)
 
 
-def _retrying_on_rate_limit(call: Callable[[], object], *, sleep=time.sleep) -> object:
-    """Retry a throttled call with exponential backoff.
+def _retrying(call: Callable[[], object], *, sleep=time.sleep) -> object:
+    """Retry a transient provider failure with exponential backoff.
 
-    A free-tier key allows roughly 10-15 requests per minute and one query can ask about
-    twenty ranges, so a throttle is the expected case rather than an exceptional one.
-    Without this the range is recorded as errored and its footage is dropped as if it
-    were unusable. Only throttles retry -- a genuine failure still surfaces at once.
+    A free-tier key allows roughly 10-15 requests per minute, one query can ask about
+    twenty ranges, and the shared free capacity returns 503 under load. Both are the
+    expected case rather than an exceptional one. Without this the range is recorded as
+    errored and its footage discarded as if it were unusable. Only transient failures
+    retry -- a bad key or a malformed request still surfaces at once.
     """
-    for attempt in range(RATE_LIMIT_ATTEMPTS):
+    for attempt in range(RETRY_ATTEMPTS):
         try:
             return call()
         except Exception as exc:
-            if attempt == RATE_LIMIT_ATTEMPTS - 1 or not _is_rate_limit(exc):
+            if attempt == RETRY_ATTEMPTS - 1 or not _is_transient(exc):
                 raise
-            sleep(RATE_LIMIT_BACKOFF * (2**attempt))
+            sleep(RETRY_BACKOFF * (2**attempt))
     raise AssertionError("unreachable")  # pragma: no cover
 
 
@@ -151,13 +159,13 @@ def _ask_gemini(frames: Sequence[bytes], prompt: str) -> dict:
         )
 
     try:
-        response = _retrying_on_rate_limit(request)
+        response = _retrying(request)
     except Exception as exc:
-        if _is_rate_limit(exc):
+        if _is_transient(exc):
             raise ReelsError(
-                f"the vision model is rate limiting this key after {RATE_LIMIT_ATTEMPTS} "
-                f"attempts: {exc}. A free-tier key allows roughly 10-15 requests a minute; "
-                f"try --shortlist 8."
+                f"the vision model was still unavailable after {RETRY_ATTEMPTS} attempts: "
+                f"{exc}. Free-tier capacity is shared and rate limited; try again shortly, "
+                f"or --shortlist 8 to ask for less at once."
             ) from exc
         raise ReelsError(f"the vision model request failed: {exc}") from exc
 

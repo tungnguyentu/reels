@@ -94,6 +94,11 @@ def cmd_clip(args: argparse.Namespace) -> int:
         # not a recording that happens to contain nothing.
         return 1 if errored and not rejected else 0
 
+    # Say why the others went, even on a successful run: the judge's taste is the part
+    # worth disagreeing with, and silent rejections give nothing to disagree with.
+    for line in rejected:
+        _say(f"  rejected{line}")
+
     for candidate, verdict in accepted:
         written = render_mod.render(
             video, candidate, verdict, args.query,
