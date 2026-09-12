@@ -4,7 +4,7 @@ This document lists recording-side settings that make future sessions easier to 
 
 None of it is required. The tool works on the existing library and on anything recorded after reading this. Nothing here is checked, detected, or enforced in code. It is creator-applied setup.
 
-The reference recording for every number below is `~/Videos/screenrecording-2026-09-12_00-34-20.mp4`: 3410x1372 (2.49:1), 60 fps, h264, 12.36 Mbit/s, 75 minutes, 6.9 GB. It is representative of the ~15 GB library.
+Every number below comes from one reference recording: 3410x1372 (2.49:1), 60 fps, h264, 12.36 Mbit/s, 75 minutes, 6.9 GB. Your own capture profile is what matters; these are here so you can see which setting each change is reacting to.
 
 ## Hide the HUD
 

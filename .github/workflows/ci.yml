@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        # CPU wheels: the default Linux torch build bundles CUDA and is ~3 GB, which the
+        # runner neither needs nor benefits from.
+        env:
+          UV_TORCH_BACKEND: cpu
+        run: uv sync
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Test
+        env:
+          UV_TORCH_BACKEND: cpu
+        run: uv run pytest -q
