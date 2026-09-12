@@ -96,6 +96,9 @@ export const thumbUrl = (video: string, t: number) =>
 
 export const clipUrl = (name: string) => `/media/clip?name=${encodeURIComponent(name)}`;
 
+export const previewUrl = (video: string, start: number, end: number) =>
+  `/media/preview?video=${encodeURIComponent(video)}&start=${start.toFixed(2)}&end=${end.toFixed(2)}`;
+
 /** Poll a job to completion. Long work is a pool thread on the server, not a stream. */
 export async function awaitJob<T>(id: string, onTick?: (j: Job<T>) => void): Promise<Job<T>> {
   for (;;) {

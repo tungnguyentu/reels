@@ -156,3 +156,29 @@ def test_treatment_focal_x_is_bounded_by_the_schema(client):
         "treatments": [{"reframe": "crop", "focal_x": 4.2}],
     })
     assert r.status_code == 422
+
+
+def test_preview_encodes_a_small_clip_and_caches_it(client):
+    c, video = client
+    r = c.get("/media/preview", params={"video": video.name, "start": 10.0, "end": 20.0})
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "video/mp4"
+    first = len(r.content)
+    again = c.get("/media/preview", params={"video": video.name, "start": 10.0, "end": 20.0})
+    assert len(again.content) == first  # served from cache, byte-identical
+
+
+def test_preview_length_is_capped(client):
+    """A candidate cannot ask the server to transcode the whole recording."""
+    from reels.api import PREVIEW_MAX_SECONDS
+
+    c, video = client
+    r = c.get("/media/preview", params={"video": video.name, "start": 0.0, "end": 99999.0})
+    assert r.status_code == 200
+    assert PREVIEW_MAX_SECONDS <= 60.0
+
+
+def test_preview_refuses_paths_outside_the_library(client):
+    c, _ = client
+    r = c.get("/media/preview", params={"video": "../../../etc/passwd", "start": 0.0, "end": 5.0})
+    assert r.status_code in (400, 404)

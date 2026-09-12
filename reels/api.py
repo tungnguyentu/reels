@@ -9,7 +9,10 @@ Binds to loopback and serves files only from within the roots it was configured 
 
 from __future__ import annotations
 
+import hashlib
 import os
+import subprocess
+import tempfile
 import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -32,7 +35,9 @@ from .search import Candidate
 from .variants import Treatment, default_treatments, render_variants
 
 VIDEO_SUFFIXES = {".mp4", ".mkv", ".mov", ".webm", ".avi"}
-THUMB_WIDTH = 480
+PREVIEW_WIDTH = 480
+PREVIEW_MAX_SECONDS = 60.0
+PREVIEW_DIR = Path(tempfile.gettempdir()) / "reels-previews"
 
 
 @dataclass
@@ -224,6 +229,38 @@ def create_app(settings: Settings) -> FastAPI:
             raise HTTPException(404, str(exc)) from None
         return Response(jpeg, media_type="image/jpeg",
                         headers={"Cache-Control": "public, max-age=3600"})
+
+    @app.get("/media/preview")
+    def preview(video: str, start: float = Query(ge=0.0), end: float = Query(gt=0.0)) -> FileResponse:
+        """A small, muted clip of one candidate, encoded on demand and cached.
+
+        The sources are ultrawide 60fps and not faststart, so range-serving the original
+        makes the browser pull a large index and decode far more than it shows. A 480p
+        proxy is a couple of seconds to make, then instant and smooth for every replay.
+        """
+        path = resolve(video, settings.library)
+        span = min(max(end - start, 0.1), PREVIEW_MAX_SECONDS)
+        key = hashlib.sha256(f"{path}|{start:.3f}|{span:.3f}".encode()).hexdigest()[:16]
+        PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+        cached = PREVIEW_DIR / f"{key}.mp4"
+
+        if not cached.is_file():
+            staging = cached.with_suffix(".partial.mp4")
+            proc = subprocess.run(
+                ["ffmpeg", "-v", "error", "-ss", f"{start:.3f}", "-t", f"{span:.3f}",
+                 "-i", str(path), "-an", "-vf", f"scale={PREVIEW_WIDTH}:-2",
+                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "30",
+                 "-movflags", "+faststart", "-pix_fmt", "yuv420p", str(staging), "-y"],
+                capture_output=True, text=True, check=False,
+            )
+            if proc.returncode != 0 or not staging.is_file():
+                staging.unlink(missing_ok=True)
+                detail = proc.stderr.strip().splitlines()
+                raise HTTPException(500, f"preview failed: {detail[-1] if detail else proc.returncode}")
+            staging.replace(cached)
+
+        return FileResponse(cached, media_type="video/mp4",
+                            headers={"Cache-Control": "public, max-age=86400"})
 
     @app.post("/api/judge")
     def judge(body: JudgeIn) -> dict:
