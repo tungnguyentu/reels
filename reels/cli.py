@@ -17,6 +17,8 @@ from . import render as render_mod
 
 DEFAULT_MUSIC_DIR = Path.home() / "Videos"
 DEFAULT_OUT_DIR = Path("out")
+DEFAULT_LIBRARY = Path.home() / "Videos"
+DEFAULT_UI_PORT = 8765
 
 
 def _say(message: str) -> None:
@@ -113,6 +115,35 @@ def cmd_clip(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ui(args: argparse.Namespace) -> int:
+    """Serve the review UI on loopback.
+
+    Searching and thumbnails need no API key, so the UI is usable without one -- judging
+    is the only call that does, and it is opt-in per candidate.
+    """
+    try:
+        import uvicorn
+
+        from .api import Settings, create_app
+    except ImportError as exc:
+        raise ReelsError(f"the UI extras are not installed: {exc}") from exc
+
+    app = create_app(Settings(
+        library=Path(args.library), music_dir=Path(args.music_dir), out_dir=Path(args.out_dir),
+    ))
+    url = f"http://127.0.0.1:{args.port}"
+    built = Path(__file__).resolve().parent.parent / "web" / "dist"
+    if not built.is_dir():
+        _say("web/dist not built -- serving the API only. Run `pnpm install && pnpm build` in web/.")
+    _say(f"reels ui on {url}  (library: {args.library})")
+    if not args.no_browser:
+        import webbrowser
+
+        webbrowser.open(url)
+    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="reels", description=__doc__.splitlines()[0])
     subs = parser.add_subparsers(dest="command", required=True)
@@ -133,6 +164,14 @@ def build_parser() -> argparse.ArgumentParser:
     clip_cmd.add_argument("--music-dir", default=str(DEFAULT_MUSIC_DIR))
     clip_cmd.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
     clip_cmd.set_defaults(func=cmd_clip)
+
+    ui_cmd = subs.add_parser("ui", help="review candidates and pick variants in a browser")
+    ui_cmd.add_argument("--library", default=str(DEFAULT_LIBRARY), help="folder of recordings")
+    ui_cmd.add_argument("--music-dir", default=str(DEFAULT_MUSIC_DIR))
+    ui_cmd.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
+    ui_cmd.add_argument("--port", type=int, default=DEFAULT_UI_PORT)
+    ui_cmd.add_argument("--no-browser", action="store_true", help="do not open a browser tab")
+    ui_cmd.set_defaults(func=cmd_ui)
     return parser
 
 

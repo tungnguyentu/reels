@@ -83,7 +83,8 @@ class Verdict:
     reframe: str | None = None
 
 
-def _grab_frame(video: Path, at: float) -> bytes:
+def grab_frame(video: Path, at: float) -> bytes:
+    """One JPEG at a timestamp. Used for judge input and for UI thumbnails."""
     jpeg = run_tool(
         ["ffmpeg", "-v", "error", "-ss", f"{at:.3f}", "-i", str(video), "-frames:v", "1",
          "-vf", f"scale={SAMPLE_WIDTH}:-2", "-f", "image2", "-c:v", "mjpeg", "-"],
@@ -97,7 +98,7 @@ def _grab_frame(video: Path, at: float) -> bytes:
 def sample_frames(video: Path, candidate: Candidate, count: int = FRAMES_PER_RANGE) -> list[bytes]:
     """Evenly spaced frames from inside the range, avoiding both boundaries."""
     times = np.linspace(candidate.start, candidate.end, count + 2)[1:-1]
-    return [_grab_frame(Path(video), float(t)) for t in times]
+    return [grab_frame(Path(video), float(t)) for t in times]
 
 
 def _is_transient(exc: Exception) -> bool:

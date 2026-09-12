@@ -169,3 +169,17 @@ def test_empty_result_reports_the_observed_peak(
     sensitive to query phrasing, so the operator needs the number to judge it."""
     assert cli.main(clip_args(fixture_video, music_dir, tmp_path, floor=1.5)) == 0
     assert "below the 1.5 floor" in capsys.readouterr().err
+
+
+def test_ui_command_builds_an_app_and_serves_on_loopback(tmp_path, monkeypatch):
+    """Never bind a public interface: this serves local media by path."""
+    served = {}
+    import uvicorn
+
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: served.update(kw))
+    assert cli.main([
+        "ui", "--no-browser", "--library", str(tmp_path),
+        "--music-dir", str(tmp_path), "--out-dir", str(tmp_path), "--port", "9999",
+    ]) == 0
+    assert served["host"] == "127.0.0.1"
+    assert served["port"] == 9999
