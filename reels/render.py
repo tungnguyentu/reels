@@ -119,13 +119,15 @@ def render(
     *,
     music_dir: Path,
     out_dir: Path,
+    track: Path | None = None,
 ) -> Path:
     video = Path(video)
     duration = candidate.duration
     if duration <= 0:
         raise ReelsError(f"cannot render a zero-length range from {video.name}")
 
-    track = pick_track(music_tracks(music_dir), f"{video.name}|{query}|{candidate.start}")
+    if track is None:
+        track = pick_track(music_tracks(music_dir), f"{video.name}|{query}|{candidate.start}")
     source_width, source_height = probe_size(video)
     fade_start = max(0.0, duration - FADE_SECONDS)
     destination = output_path(Path(out_dir), video, query, candidate.start)
