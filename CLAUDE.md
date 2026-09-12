@@ -6,10 +6,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 uv sync                                   # needs ffmpeg + ffprobe on PATH
-uv run pytest -q                          # 88 tests, no network or API key needed
+uv run pytest -q                          # 115 tests, no network or API key needed
 uv run pytest tests/test_search.py -q     # one file
 uv run pytest -k hysteresis -q            # one test by name
 uv run ruff check . --fix
+```
+
+Frontend (only needed for the UI):
+
+```bash
+cd web && npm install && npm run build    # npm, not pnpm -- see Gotchas
+uv run reels ui --no-browser              # serves web/dist + the API on 127.0.0.1:8765
+cd web && npm run dev                     # Vite dev server, proxies /api to port 8765
 ```
 
 Running the tool itself:
@@ -25,10 +33,13 @@ alias rather than a pinned id, because a pinned version goes stale silently.
 
 ## Architecture
 
-A five-stage pipeline, one module per stage, with a linear dependency chain:
+A linear pipeline, one module per stage, plus two layers that sit on top of it:
 
 ```
-cli.py → index.py → search.py → judge.py → render.py
+index.py -> search.py -> judge.py -> render.py
+                                         ^
+                     variants.py --------'     several treatments of one moment
+        cli.py --+-- api.py -- web/            two front ends over one pipeline
 ```
 
 **`index.py` is the write path and owns the CLIP model.** `search.py` importing
@@ -66,6 +77,22 @@ and archive extraction preserve mtime) and the model name plus pretrained tag (e
 from another checkpoint live in a different space and score as confident nonsense rather
 than failing).
 
+**The UI inverts the judge's role, and that is the point.** `api.py` keeps search and
+judging as separate endpoints: search and thumbnails are free and need no key, judging is
+opt-in per candidate. The judge is the least reliable part of the pipeline, so in the UI
+it is advice beside a thumbnail rather than a gate. Do not fold judging back into search.
+
+**`variants.py` sits above `render.py`.** A `Treatment` (reframe mode, focal point, track,
+trim) becomes a synthetic `Verdict`, so `render()` needs no knowledge of variants. Track
+resolution and the treatment cap are checked before the first encode, because each
+treatment is a full re-encode and failing on the fourth of five wastes minutes.
+
+**Every path arriving from the browser goes through `resolve()` in `api.py`**, which
+checks membership in a configured root *after* resolving symlinks rather than inspecting
+the string for `..`. Long work runs on a small pool with polled job status; any escaping
+exception becomes a failed job, because a stranded `running` status leaves the browser
+polling forever.
+
 **`run_tool()` in `__init__.py` wraps every ffmpeg/ffprobe call.** `check=False` plus a
 manual returncode check is deliberate: it converts failures into a `ReelsError` carrying
 ffmpeg's last stderr line, which `check=True` would discard.
@@ -96,3 +123,8 @@ real failure was observed, so check the test before deleting a guard that looks 
 - Transient provider failures retry with backoff, and that means `503 UNAVAILABLE` as well
   as `429`. A live free-tier run lost candidates to 503 when only 429 was matched.
 - `crop_window()` returns four values (`w, h, x, y`), not two.
+- **Use npm for `web/`, not pnpm.** pnpm 10+ blocks esbuild's postinstall behind an
+  interactive approval, moved that setting out of `package.json`, and then fails the
+  build on a no-op install. npm runs it, and contributors are likelier to have it.
+- `CropPreview` derives the 9:16 window width from the thumbnail's own natural aspect
+  ratio, so it is correct for any source without asking the server for dimensions.

@@ -94,6 +94,25 @@ Set `REELS_JUDGE_MODEL` to use a different vision model than the default.
 When nothing matches, the tool says so and writes nothing — and prints the score it
 actually saw, so you can tell "not in this recording" from "scored just under the floor".
 
+## The review UI
+
+```bash
+cd web && npm install && npm run build    # once
+uv run reels ui                           # opens a browser on 127.0.0.1:8765
+```
+
+Search and thumbnails cost nothing, so the UI shows you candidates immediately and you
+pick by eye — **it works with no API key at all.** Asking the model is a separate button,
+and its verdict is advice next to the thumbnails rather than a gate.
+
+Picking a candidate opens a variant panel. One moment can be rendered several ways at
+once: focal-point crop vs blurred pillarbox, a slider that drags the 9:16 window across
+the frame with a live overlay showing exactly what it keeps, and a specific music track
+per variant. Render them all and choose the one you'd post.
+
+That inverts the judge's role. It is the least reliable part of the pipeline, and in the
+UI it stops being load-bearing.
+
 ## Limitations
 
 Worth knowing before you rely on it:
@@ -110,7 +129,8 @@ Worth knowing before you rely on it:
 - **Very wide sources crop badly.** A 2.49:1 capture keeps about 22% of its width in a
   9:16 window. `docs/recording-setup.md` covers the capture-side settings that help.
 - **No offline mode yet.** The judge requires a hosted API. A local vision-model backend
-  behind the same interface is the obvious next step.
+  behind the same interface is the obvious next step. The UI does not need it — search,
+  thumbnails, variants and rendering all run without a key.
 
 ## Contributing
 

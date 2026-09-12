@@ -9,8 +9,10 @@ reason.
 
 ```bash
 uv sync                      # needs Python 3.11+ and ffmpeg/ffprobe on PATH
-uv run pytest                # 88 tests, no network or API key required
+uv run pytest                # no network or API key required
 uv run ruff check .
+
+cd web && npm install && npm run build   # only if you are touching the UI
 ```
 
 Tests stub CLIP and the vision API, except one case that loads the real CLIP model to check
