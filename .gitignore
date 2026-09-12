@@ -5,8 +5,6 @@ __pycache__/
 *.reels.npz
 out/
 
-# working artifacts
-docs/plans/
 
 # web
 web/node_modules/
