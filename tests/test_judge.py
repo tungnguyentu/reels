@@ -102,3 +102,66 @@ def test_sample_frames_reads_inside_the_range(fixture_video):
     frames = judge_mod.sample_frames(fixture_video, Candidate(10.0, 40.0, 0.3), count=3)
     assert len(frames) == 3
     assert all(f.startswith(b"\xff\xd8") for f in frames)  # JPEG magic
+
+
+class Throttled(Exception):
+    """Stands in for the client's rate-limit error, which exposes a numeric code."""
+
+    code = 429
+
+
+def test_a_throttled_call_is_retried_and_succeeds():
+    """Free-tier keys allow ~10-15 requests a minute and one query asks about up to 20
+    ranges, so a throttle must not discard the range as unusable footage."""
+    attempts = []
+    naps = []
+
+    def call():
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise Throttled("429 RESOURCE_EXHAUSTED")
+        return "ok"
+
+    assert judge_mod._retrying_on_rate_limit(call, sleep=naps.append) == "ok"
+    assert len(attempts) == 3
+    assert naps == [judge_mod.RATE_LIMIT_BACKOFF, judge_mod.RATE_LIMIT_BACKOFF * 2]
+
+
+def test_a_persistent_throttle_gives_up_after_the_attempt_budget():
+    attempts = []
+
+    def call():
+        attempts.append(1)
+        raise Throttled("429")
+
+    with pytest.raises(Throttled):
+        judge_mod._retrying_on_rate_limit(call, sleep=lambda _s: None)
+    assert len(attempts) == judge_mod.RATE_LIMIT_ATTEMPTS
+
+
+def test_a_real_failure_is_not_retried():
+    """Retrying a malformed request or a bad key just multiplies the wait."""
+    attempts = []
+
+    def call():
+        attempts.append(1)
+        raise ValueError("400 INVALID_ARGUMENT")
+
+    with pytest.raises(ValueError):
+        judge_mod._retrying_on_rate_limit(call, sleep=lambda _s: None)
+    assert len(attempts) == 1
+
+
+@pytest.mark.parametrize("exc", [
+    Throttled("boom"),                        # structural: code attribute
+    RuntimeError("429 Too Many Requests"),    # textual: status in the message
+    RuntimeError("RESOURCE_EXHAUSTED"),
+    RuntimeError("rate limit exceeded"),
+])
+def test_rate_limits_are_recognised_structurally_and_textually(exc):
+    assert judge_mod._is_rate_limit(exc)
+
+
+@pytest.mark.parametrize("exc", [ValueError("400 bad request"), RuntimeError("timeout")])
+def test_other_errors_are_not_mistaken_for_rate_limits(exc):
+    assert not judge_mod._is_rate_limit(exc)

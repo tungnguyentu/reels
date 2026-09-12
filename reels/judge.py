@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +25,8 @@ MODEL_ENV = "REELS_JUDGE_MODEL"
 DEFAULT_MODEL = "gemini-2.5-flash"
 FRAMES_PER_RANGE = 3
 SAMPLE_WIDTH = 768
+RATE_LIMIT_ATTEMPTS = 3
+RATE_LIMIT_BACKOFF = 4.0  # seconds before the first retry, doubling after that
 
 CROP = "crop"
 PILLARBOX = "pillarbox"
@@ -92,6 +95,37 @@ def sample_frames(video: Path, candidate: Candidate, count: int = FRAMES_PER_RAN
     return [_grab_frame(Path(video), float(t)) for t in times]
 
 
+def _is_rate_limit(exc: Exception) -> bool:
+    """Whether a provider error is a throttle rather than a real failure.
+
+    Matched structurally where the client exposes a code, and by text otherwise, so a
+    client version that changes its exception classes does not silently turn a throttle
+    back into a discarded candidate.
+    """
+    if (getattr(exc, "code", None) or getattr(exc, "status_code", None)) == 429:
+        return True
+    text = str(exc).upper()
+    return "429" in text or "RESOURCE_EXHAUSTED" in text or "RATE LIMIT" in text
+
+
+def _retrying_on_rate_limit(call: Callable[[], object], *, sleep=time.sleep) -> object:
+    """Retry a throttled call with exponential backoff.
+
+    A free-tier key allows roughly 10-15 requests per minute and one query can ask about
+    twenty ranges, so a throttle is the expected case rather than an exceptional one.
+    Without this the range is recorded as errored and its footage is dropped as if it
+    were unusable. Only throttles retry -- a genuine failure still surfaces at once.
+    """
+    for attempt in range(RATE_LIMIT_ATTEMPTS):
+        try:
+            return call()
+        except Exception as exc:
+            if attempt == RATE_LIMIT_ATTEMPTS - 1 or not _is_rate_limit(exc):
+                raise
+            sleep(RATE_LIMIT_BACKOFF * (2**attempt))
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
 def _ask_gemini(frames: Sequence[bytes], prompt: str) -> dict:
     api_key = os.environ.get(API_KEY_ENV)
     if not api_key:
@@ -107,15 +141,24 @@ def _ask_gemini(frames: Sequence[bytes], prompt: str) -> dict:
 
     client = genai.Client(api_key=api_key)
     parts = [types.Part.from_bytes(data=f, mime_type="image/jpeg") for f in frames]
-    try:
-        response = client.models.generate_content(
+    def request():
+        return client.models.generate_content(
             model=os.environ.get(MODEL_ENV, DEFAULT_MODEL),
             contents=[*parts, prompt],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json", response_schema=SCHEMA
             ),
         )
+
+    try:
+        response = _retrying_on_rate_limit(request)
     except Exception as exc:
+        if _is_rate_limit(exc):
+            raise ReelsError(
+                f"the vision model is rate limiting this key after {RATE_LIMIT_ATTEMPTS} "
+                f"attempts: {exc}. A free-tier key allows roughly 10-15 requests a minute; "
+                f"try --shortlist 8."
+            ) from exc
         raise ReelsError(f"the vision model request failed: {exc}") from exc
 
     try:
