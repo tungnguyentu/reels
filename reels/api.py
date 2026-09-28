@@ -24,7 +24,7 @@ from typing import Any, Literal
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import ReelsError
 from . import index as index_mod
@@ -68,7 +68,19 @@ class State:
 
 # ---------------------------------------------------------------- request models
 
-class TreatmentIn(BaseModel):
+class In(BaseModel):
+    """Base for every request body: an unknown field is a 422, not a silent no-op.
+
+    Observed live -- the browser sent `best` to a server whose model predated the field,
+    pydantic dropped it, and the job ran to completion returning a plausible wrong
+    answer. A rejected request names the mistake; an ignored one hides it behind a
+    result that looks fine.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class TreatmentIn(In):
     reframe: Literal["crop", "pillarbox"] = CROP
     focal_x: float = Field(0.5, ge=0.0, le=1.0)
     track: str | None = None
@@ -79,7 +91,7 @@ class TreatmentIn(BaseModel):
         return Treatment(self.reframe, self.focal_x, self.track, self.start, self.end)
 
 
-class SearchIn(BaseModel):
+class SearchIn(In):
     video: str
     query: str = Field(min_length=1)
     min_seconds: float = search_mod.DEFAULT_MIN_SECONDS
@@ -88,7 +100,7 @@ class SearchIn(BaseModel):
     floor: float = search_mod.DEFAULT_FLOOR
 
 
-class RangeIn(BaseModel):
+class RangeIn(In):
     start: float
     end: float
     peak: float = 0.0
@@ -97,20 +109,20 @@ class RangeIn(BaseModel):
         return Candidate(self.start, self.end, self.peak)
 
 
-class JudgeIn(BaseModel):
+class JudgeIn(In):
     video: str
     query: str
     ranges: list[RangeIn] = Field(min_length=1, max_length=20)
 
 
-class RenderIn(BaseModel):
+class RenderIn(In):
     video: str
     query: str
     range: RangeIn
     treatments: list[TreatmentIn] = Field(min_length=1)
 
 
-class KillsIn(BaseModel):
+class KillsIn(In):
     video: str
     music: str | None = None
     pre: float = Field(default=3.0, gt=0, le=30)
@@ -121,36 +133,36 @@ class KillsIn(BaseModel):
     region: str | None = None
 
 
-class IndexIn(BaseModel):
+class IndexIn(In):
     video: str
 
 
-class PackageTitlesIn(BaseModel):
+class PackageTitlesIn(In):
     clip: str
     steer: str = ""
     query: str | None = None
 
 
-class PackageDescriptionIn(BaseModel):
+class PackageDescriptionIn(In):
     clip: str
     title: str = Field(min_length=1)
     query: str | None = None
 
 
-class PackageCoversIn(BaseModel):
+class PackageCoversIn(In):
     clip: str
     cover_text: str = Field(min_length=1)
     count: int = Field(3, ge=1, le=10)
 
 
-class PackageTitleIn(BaseModel):
+class PackageTitleIn(In):
     title: str
     cover_text: str
     reason: str = ""
     frame_index: int = Field(ge=0)
 
 
-class PackageExportIn(BaseModel):
+class PackageExportIn(In):
     clip: str
     title: str = Field(min_length=1)
     description: str = ""

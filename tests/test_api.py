@@ -294,3 +294,41 @@ def test_best_n_reaches_the_detector_and_excludes_max_clips(client, monkeypatch)
     assert wait(c, job)["status"] == "done"
     assert "--best" in seen["cmd"] and "5" in seen["cmd"]
     assert "--max-clips" not in seen["cmd"]
+
+
+def test_an_unknown_field_is_rejected_rather_than_ignored(client):
+    """A field the server does not know is a mistake, not a no-op.
+
+    This is why: `best` was posted to a server whose model predated it, pydantic dropped
+    it, and the job completed with a plausible wrong answer that looked like success.
+    """
+    c, video = client
+    assert c.post("/api/kills", json={"video": video.name, "bets": 5}).status_code == 422
+    assert c.post("/api/search", json={"video": video.name, "query": "x",
+                                       "shortlst": 4}).status_code == 422
+    assert c.post("/api/judge", json={"video": video.name, "query": "x",
+                                      "ranges": [{"start": 1.0, "end": 2.0, "peek": 0.3}]},
+                  ).status_code == 422, "nested bodies too"
+
+
+def test_the_fields_the_browser_actually_sends_are_all_accepted(client):
+    """The other half of forbidding extras: the real client must not trip over it.
+
+    Asserted as "not 422" rather than "200" -- an unindexed recording answering 409 is a
+    different question, and pinning 200 here would only make this test about indexing.
+    """
+    c, video = client
+    sent = [
+        ("/api/search", {"video": video.name, "query": "forest", "shortlist": 4,
+                         "floor": 0.0, "min_seconds": 0.0, "max_seconds": 45.0}),
+        ("/api/judge", {"video": video.name, "query": "forest",
+                        "ranges": [{"start": 10.0, "end": 26.0, "peak": 0.3}]}),
+        ("/api/render", {"video": video.name, "query": "forest",
+                         "range": {"start": 10.0, "end": 26.0, "peak": 0.3},
+                         "treatments": [{"reframe": "crop", "focal_x": 0.5, "track": None,
+                                         "start": None, "end": None}]}),
+        ("/api/kills", {"video": video.name, "music": None, "best": 3}),
+        ("/api/index", {"video": video.name}),
+    ]
+    for path, body in sent:
+        assert c.post(path, json=body).status_code != 422, f"{path} rejected its own client"

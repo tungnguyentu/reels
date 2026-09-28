@@ -128,6 +128,13 @@ is in `frames.py`. Packaging samples source frames when the render sidecar can r
 then falls back to the clip. Covers use a vendored font and JPEG, because JPEG can reduce
 quality to stay under 2 MB while PNG cannot.
 
+**Every request body in `api.py` inherits `In`, which forbids unknown fields.** A field
+the server does not know is a mistake, not a no-op: `best` was once posted to a server
+whose model predated it, pydantic dropped it silently, and the job completed with a
+plausible wrong answer that looked like success. A new request model must subclass `In`,
+and a field added to the API is only live once the server restarts — `web/dist` is served
+from disk, so a frontend rebuild needs no restart while a Python change does.
+
 **Every path arriving from the browser goes through `resolve()` in `api.py`**, which
 checks membership in a configured root *after* resolving symlinks rather than inspecting
 the string for `..`. Long work runs on a small pool with polled job status; any escaping
