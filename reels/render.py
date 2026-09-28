@@ -147,9 +147,16 @@ def render(
     ]
     try:
         run_tool(command, what="rendering")
+        destination.with_suffix(".query").write_text(query, encoding="utf-8")
+        destination.with_suffix(".source").write_text(
+            json.dumps({"source": str(video.resolve()), "start": candidate.start, "end": candidate.end}),
+            encoding="utf-8",
+        )
     except BaseException:
         # BaseException, not ReelsError: Ctrl-C mid-encode would otherwise leave a
         # truncated .mp4 that the collision-avoiding suffix never overwrites.
         destination.unlink(missing_ok=True)
+        destination.with_suffix(".query").unlink(missing_ok=True)
+        destination.with_suffix(".source").unlink(missing_ok=True)
         raise
     return destination

@@ -1,6 +1,6 @@
 import { clipUrl, type Clip } from "../api";
 
-export function ClipList({ clips }: { clips: Clip[] }) {
+export function ClipList({ clips, onPackage }: { clips: Clip[]; onPackage: (clip: Clip) => void }) {
   if (clips.length === 0) {
     return <p className="p-4 text-sm text-neutral-600">Nothing rendered yet.</p>;
   }
@@ -17,6 +17,7 @@ export function ClipList({ clips }: { clips: Clip[] }) {
           <figcaption className="truncate text-xs text-neutral-500" title={clip.name}>
             {clip.name.replace(/\.mp4$/, "")} · {(clip.size / 1048576).toFixed(0)} MB
           </figcaption>
+          <button type="button" onClick={() => onPackage(clip)} className="text-left text-xs text-emerald-300 hover:text-emerald-200">package</button>
         </figure>
       ))}
     </div>

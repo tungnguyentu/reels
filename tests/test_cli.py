@@ -183,3 +183,42 @@ def test_ui_command_builds_an_app_and_serves_on_loopback(tmp_path, monkeypatch):
     ]) == 0
     assert served["host"] == "127.0.0.1"
     assert served["port"] == 9999
+
+
+def test_accepted_spans_are_ordered_by_appeal(
+    fixture_video, music_dir, tmp_path, stub_pipeline, monkeypatch
+):
+    """A truncated run should keep the best moments, not the earliest ones."""
+    appeals = iter([3, 9, 6])
+
+    def judge_one(*_a, **_k):
+        return Verdict(True, "ok", 0.5, CROP, next(appeals), "a hook")
+
+    monkeypatch.setattr(judge_mod, "judge", judge_one)
+    seen: list[int] = []
+
+    def fake_render(_video, _candidate, verdict, *a, **k):
+        seen.append(verdict.appeal)
+        return tmp_path / f"{verdict.appeal}.mp4"
+
+    monkeypatch.setattr(render_mod, "render", fake_render)
+    argv = clip_args(fixture_video, music_dir, tmp_path, floor=0.0, min_seconds=0.0, shortlist=3)
+    assert cli.main(argv) == 0
+    assert seen == [9, 6, 3], "rendering must follow the appeal ranking, not search order"
+
+
+def test_an_unscored_span_keeps_its_place_rather_than_sinking(
+    fixture_video, music_dir, tmp_path, stub_pipeline, monkeypatch
+):
+    """A backend that never scores appeal must leave CLIP's ranking intact."""
+    monkeypatch.setattr(judge_mod, "judge", lambda *a, **k: Verdict(True, "ok", 0.5, CROP))
+    peaks: list[float] = []
+
+    def fake_render(_video, candidate, _verdict, *a, **k):
+        peaks.append(candidate.peak)
+        return tmp_path / f"{len(peaks)}.mp4"
+
+    monkeypatch.setattr(render_mod, "render", fake_render)
+    argv = clip_args(fixture_video, music_dir, tmp_path, floor=0.0, min_seconds=0.0, shortlist=3)
+    assert cli.main(argv) == 0
+    assert peaks == sorted(peaks, reverse=True)

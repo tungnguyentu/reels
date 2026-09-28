@@ -159,6 +159,17 @@ export default function App() {
     ]);
   };
 
+  // Once judged, the most appealing float to the top. Before judging the order is CLIP's
+  // ranking and is left alone; a span the model scored nothing for keeps its place behind
+  // the scored ones rather than sinking to the bottom.
+  const ranked = useMemo(() => {
+    const found = result?.candidates ?? [];
+    if (!Object.keys(verdicts).length) return found;
+    return [...found].sort(
+      (a, b) => (verdicts[rangeKey(b)]?.appeal ?? -1) - (verdicts[rangeKey(a)]?.appeal ?? -1),
+    );
+  }, [result, verdicts]);
+
   return (
     <div className="flex h-screen flex-col">
       <header className="flex items-center gap-3 border-b border-neutral-800 px-4 py-3">
@@ -283,7 +294,7 @@ export default function App() {
 
           {result && result.candidates.length > 0 && (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-3 p-4">
-              {result.candidates.map((c) => (
+              {ranked.map((c) => (
                 <CandidateCard
                   key={rangeKey(c)}
                   video={video!}

@@ -76,9 +76,16 @@ def cmd_clip(args: argparse.Namespace) -> int:
             errored.append(f"  {span}: {outcome}")
         elif outcome.accepted:
             accepted.append((candidate, outcome))
-            _say(f"  {span}: accepted ({outcome.reframe})")
+            appeal = "" if outcome.appeal is None else f", appeal {outcome.appeal}/10"
+            hook = f" -- {outcome.hook}" if outcome.hook else ""
+            _say(f"  {span}: accepted ({outcome.reframe}{appeal}){hook}")
         else:
             rejected.append(f"  {span}: {outcome.reason}")
+
+    # Most appealing first, so a truncated run keeps the best rather than the earliest.
+    # CLIP still decided where these ranges start and stop; this only reorders them.
+    accepted.sort(key=lambda pair: (pair[1].appeal is not None, pair[1].appeal or 0,
+                                    pair[0].peak), reverse=True)
 
     if not accepted:
         _say(f'no usable clip for "{args.query}" in {video.name}.')

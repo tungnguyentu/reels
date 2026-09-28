@@ -184,6 +184,9 @@ def test_crop_render_is_1080x1920_with_audio(fixture_video, music_dir, tmp_path)
     stream = probe(out, "stream=width,height")["streams"][0]
     assert (int(stream["width"]), int(stream["height"])) == (rnd.OUTPUT_WIDTH, rnd.OUTPUT_HEIGHT)
     assert probe(out, "stream=codec_type", stream="a:0")["streams"]
+    assert out.with_suffix(".query").read_text(encoding="utf-8") == "forest landscape"
+    source = json.loads(out.with_suffix(".source").read_text(encoding="utf-8"))
+    assert source["source"] == str(fixture_video.resolve())
 
 
 def test_pillarbox_render_is_1080x1920(fixture_video, music_dir, tmp_path):

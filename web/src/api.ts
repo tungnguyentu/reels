@@ -13,6 +13,8 @@ export type Verdict = {
   reason: string;
   focal_x: number | null;
   reframe: string | null;
+  appeal: number | null;
+  hook: string | null;
 };
 export type Treatment = {
   reframe: "crop" | "pillarbox";

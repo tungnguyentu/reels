@@ -62,6 +62,13 @@ The source frame is much wider than it is tall. If you accept, also report:
 - reframe: "crop" if a tall narrow window around focal_x still contains the subject and
   reads as a complete shot. "pillarbox" if the scene needs the full width to make sense
   and cropping it would throw away the subject.
+- appeal: 0-10, how likely a scroller is to stop on this and keep watching. Judge what
+  is actually visible: a decisive action, a near miss, a reversal, an unusual sight, or
+  motion that resolves into something. Score low for anything a viewer has seen a
+  thousand times, anything that takes several seconds to become interesting, and
+  anything whose payoff happened off-screen or before this span.
+- hook: one short phrase naming what would hold someone in the first second. If nothing
+  would, say so plainly rather than inventing something.
 
 Respond with JSON only."""
 
@@ -72,6 +79,8 @@ SCHEMA = {
         "reason": {"type": "string"},
         "focal_x": {"type": "number"},
         "reframe": {"type": "string", "enum": [CROP, PILLARBOX]},
+        "appeal": {"type": "integer", "minimum": 0, "maximum": 10},
+        "hook": {"type": "string"},
     },
     "required": ["accepted", "reason"],
 }
@@ -83,6 +92,12 @@ class Verdict:
     reason: str
     focal_x: float | None = None
     reframe: str | None = None
+    # How likely a scroller is to stop on this, 0-10, and what would hold them. This
+    # ranks accepted spans; it never gates them. The model has seen no retention data
+    # for this account, so it is a prior about what reads as interesting, not a
+    # prediction -- treated as a gate it would quietly discard usable footage.
+    appeal: int | None = None
+    hook: str | None = None
 
 
 def sample_frames(video: Path, candidate: Candidate, count: int = FRAMES_PER_RANGE) -> list[bytes]:
@@ -166,6 +181,19 @@ def _ask_gemini(frames: Sequence[bytes], prompt: str) -> dict:
         raise ReelsError(f"the vision model returned something unreadable: {exc}") from exc
 
 
+def _appeal(payload: dict) -> tuple[int | None, str | None]:
+    """The appeal score and hook, or (None, None) when the model left them out.
+
+    Missing is not zero: a backend or model that never answers this must leave the
+    ranking untouched rather than sort every span to the bottom.
+    """
+    raw = payload.get("appeal")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None, None
+    hook = str(payload.get("hook", "")).strip() or None
+    return int(min(10, max(0, round(raw)))), hook
+
+
 def _to_verdict(payload: object) -> Verdict:
     if not isinstance(payload, dict) or "accepted" not in payload:
         raise ReelsError(f"the vision model returned an incomplete verdict: {payload!r}")
@@ -184,7 +212,8 @@ def _to_verdict(payload: object) -> Verdict:
         # Checked on both paths: a non-numeric focal_x used to reach the clamp on the
         # pillarbox branch and raise a bare TypeError, losing every range already judged.
         raise ReelsError(f"the vision model returned a non-numeric focal point: {payload!r}")
-    return Verdict(True, reason, float(min(1.0, max(0.0, focal_x))), reframe)
+    appeal, hook = _appeal(payload)
+    return Verdict(True, reason, float(min(1.0, max(0.0, focal_x))), reframe, appeal, hook)
 
 
 def judge(video: Path, candidate: Candidate, query: str, *, ask: Asker | None = None) -> Verdict:

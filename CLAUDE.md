@@ -78,6 +78,15 @@ accept/reject and where a vertical crop should sit. Boundaries come from per-fra
 never from a model reading timestamps off thumbnails. Widening the model's role reverses
 this.
 
+**Appeal ranks; it never gates.** The judge also returns `appeal` (0-10) and a one-line
+`hook`, and accepted spans are ordered by it so a truncated run keeps the best moments
+rather than the earliest. This does not widen the model's role over boundaries: CLIP still
+decides where every range starts and stops, and appeal only reorders what CLIP already
+found. Keep it out of the accept/reject decision — the model has seen no retention data
+for this account, so the score is a prior about what reads as interesting, not a
+prediction, and used as a gate it would quietly discard usable footage. A missing score is
+`None`, not `0`: a model that never answers must leave the ranking untouched.
+
 **Two thresholds in `search.py` do different jobs.** The absolute floor answers "is this
 subject in the recording at all"; hysteresis answers "where does this moment start and
 stop". The floor is the *only* reason an empty result is reachable — any relative

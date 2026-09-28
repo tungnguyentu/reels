@@ -20,7 +20,7 @@ import tempfile
 from pathlib import Path
 
 from . import ReelsError
-from .judge import CROP, DEFAULT_FOCAL_X, PILLARBOX, PROMPT, Verdict, sample_frames
+from .judge import CROP, DEFAULT_FOCAL_X, PILLARBOX, PROMPT, Verdict, _appeal, sample_frames
 from .search import Candidate
 
 BINARY = os.environ.get("REELS_AGY_BIN", "agy")
@@ -59,6 +59,8 @@ SCHEMA = {
                     "reason": {"type": "string"},
                     "focal_x": {"type": "number"},
                     "reframe": {"type": "string", "enum": [CROP, PILLARBOX]},
+                    "appeal": {"type": "integer", "minimum": 0, "maximum": 10},
+                    "hook": {"type": "string"},
                 },
                 "required": ["range", "accepted", "reason"],
             },
@@ -130,7 +132,8 @@ def _to_verdict(row: object) -> Verdict:
         focal_x = DEFAULT_FOCAL_X
     elif not isinstance(focal_x, (int, float)) or isinstance(focal_x, bool):
         raise ReelsError(f"{BINARY} returned a non-numeric focal point: {row!r}")
-    return Verdict(True, reason, float(min(1.0, max(0.0, focal_x))), reframe)
+    appeal, hook = _appeal(row)
+    return Verdict(True, reason, float(min(1.0, max(0.0, focal_x))), reframe, appeal, hook)
 
 
 def judge_ranges(video: Path, candidates: list[Candidate], query: str) -> list[Verdict]:

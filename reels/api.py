@@ -325,12 +325,14 @@ def create_app(settings: Settings) -> FastAPI:
                         "start": candidate.start, "end": candidate.end,
                         "accepted": None, "reason": str(outcome),
                         "focal_x": None, "reframe": None,
+                        "appeal": None, "hook": None,
                     })
                 else:
                     out.append({
                         "start": candidate.start, "end": candidate.end,
                         "accepted": outcome.accepted, "reason": outcome.reason,
                         "focal_x": outcome.focal_x, "reframe": outcome.reframe,
+                        "appeal": outcome.appeal, "hook": outcome.hook,
                     })
             return out
 

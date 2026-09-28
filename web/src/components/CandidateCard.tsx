@@ -141,6 +141,15 @@ export function CandidateCard({
       {key && (
         <div className={`rounded px-2 py-1 text-xs ring-1 ${VERDICT_STYLES[key]}`}>
           <span className="font-medium capitalize">{key}</span>
+          {verdict?.appeal != null && (
+            <span
+              className="ml-1 font-medium"
+              title="how likely a scroller stops on this, 0-10 — the model's guess, not measured retention"
+            >
+              · appeal {verdict.appeal}/10
+            </span>
+          )}
+          {verdict?.hook && <span className="ml-1 opacity-90">· {verdict.hook}</span>}
           {verdict?.reason && <span className="ml-1 opacity-80">— {verdict.reason}</span>}
         </div>
       )}

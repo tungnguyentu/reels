@@ -173,3 +173,43 @@ def test_transient_failures_are_recognised_structurally_and_textually(exc):
 @pytest.mark.parametrize("exc", [ValueError("400 bad request"), ValueError("401 unauthorized")])
 def test_real_failures_are_not_mistaken_for_transient_ones(exc):
     assert not judge_mod._is_transient(exc)
+
+
+def test_appeal_and_hook_are_carried_through(fixture_video):
+    verdict = judge_mod.judge(
+        fixture_video, Candidate(10.0, 26.0, 0.3), "forest",
+        ask=asker({"accepted": True, "reason": "vista", "focal_x": 0.4, "reframe": "crop",
+                   "appeal": 8, "hook": "the drop opens onto the whole valley"}),
+    )
+    assert verdict.appeal == 8
+    assert verdict.hook == "the drop opens onto the whole valley"
+
+
+def test_a_missing_appeal_is_none_not_zero(fixture_video):
+    """A model that never answers this must leave ranking untouched, not sort every
+    span to the bottom."""
+    verdict = judge_mod.judge(
+        fixture_video, Candidate(10.0, 26.0, 0.3), "forest",
+        ask=asker({"accepted": True, "reason": "vista", "focal_x": 0.4, "reframe": "crop"}),
+    )
+    assert verdict.appeal is None and verdict.hook is None
+
+
+def test_an_out_of_range_appeal_is_clamped_not_rejected(fixture_video):
+    """Appeal ranks, it never gates -- a silly score must not cost the span."""
+    for raw, want in ((99, 10), (-4, 0), (7.6, 8)):
+        verdict = judge_mod.judge(
+            fixture_video, Candidate(10.0, 26.0, 0.3), "forest",
+            ask=asker({"accepted": True, "reason": "ok", "focal_x": 0.4,
+                       "reframe": "crop", "appeal": raw}),
+        )
+        assert verdict.accepted and verdict.appeal == want
+
+
+def test_a_non_numeric_appeal_is_dropped_not_fatal(fixture_video):
+    verdict = judge_mod.judge(
+        fixture_video, Candidate(10.0, 26.0, 0.3), "forest",
+        ask=asker({"accepted": True, "reason": "ok", "focal_x": 0.4, "reframe": "crop",
+                   "appeal": "very high", "hook": "x"}),
+    )
+    assert verdict.accepted and verdict.appeal is None
