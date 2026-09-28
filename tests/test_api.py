@@ -135,6 +135,32 @@ def test_a_failing_render_reports_the_reason_rather_than_hanging(client):
     assert "no such track" in body["error"]
 
 
+def test_packaging_covers_and_export_work_without_a_key(client, monkeypatch):
+    c, video = client
+    out_dir = c.app.state.reels.settings.out_dir
+    out_dir.mkdir()
+    clip = out_dir / "clip.mp4"
+    shutil.copy(video, clip)
+    monkeypatch.delenv(judge_mod.API_KEY_ENV, raising=False)
+
+    covers_job = c.post("/api/package/covers", json={
+        "clip": clip.name, "cover_text": "Forest view", "count": 1,
+    }).json()["job"]
+    covers = wait(c, covers_job)
+    assert covers["status"] == "done"
+    cover = covers["result"][0]
+    export_job = c.post("/api/package/export", json={
+        "clip": clip.name, "title": "Forest view", "description": "", "cover": cover,
+        "titles": [{"title": "Forest view", "cover_text": "Canopy", "reason": "frame", "frame_index": 0}],
+        "covers": [cover],
+    }).json()["job"]
+    exported = wait(c, export_job)
+    assert exported["status"] == "done", exported["error"]
+    bundle = out_dir / "clip.package"
+    assert (bundle / "README.md").is_file()
+    assert "Forest view" in (bundle / "alternatives" / "titles.md").read_text(encoding="utf-8")
+
+
 def test_unknown_job_is_404(client):
     c, _ = client
     assert c.get("/api/jobs/deadbeef").status_code == 404
@@ -182,3 +208,41 @@ def test_preview_refuses_paths_outside_the_library(client):
     c, _ = client
     r = c.get("/media/preview", params={"video": "../../../etc/passwd", "start": 0.0, "end": 5.0})
     assert r.status_code in (400, 404)
+
+
+def test_a_signed_in_agy_counts_as_an_available_judge(client, monkeypatch):
+    """The UI greys its judge button on this flag. A key is not the only way in."""
+    from reels import agy
+    from reels import judge as judge_mod
+
+    c, _ = client
+    monkeypatch.delenv(judge_mod.API_KEY_ENV, raising=False)
+    monkeypatch.setenv(judge_mod.BACKEND_ENV, "agy")
+    monkeypatch.setattr(agy, "available", lambda: True)
+    body = c.get("/api/config").json()
+    assert body["judge_available"] is True
+    assert body["judge_backend"] == "agy"
+
+    monkeypatch.setattr(agy, "available", lambda: False)
+    assert c.get("/api/config").json()["judge_available"] is False
+
+
+def test_the_ui_judges_a_batch_in_one_backend_call(client, monkeypatch):
+    """Each agy invocation re-reads its harness context, so per-range calls cost ~6x."""
+    from reels import judge as judge_mod
+    from reels.judge import Verdict
+
+    c, video = client
+    calls = []
+
+    def judge_all(v, candidates, query):
+        calls.append(len(candidates))
+        return [Verdict(True, "ok", 0.5, "crop") for _ in candidates]
+
+    monkeypatch.setattr(judge_mod, "judge_all", judge_all)
+    ranges = [{"start": 10.0, "end": 26.0}, {"start": 40.0, "end": 56.0}]
+    job = c.post("/api/judge", json={"video": video.name, "query": "trees",
+                                     "ranges": ranges}).json()["job"]
+    out = wait(c, job)["result"]
+    assert calls == [2], "two ranges must reach the backend as one batch"
+    assert [r["accepted"] for r in out] == [True, True]

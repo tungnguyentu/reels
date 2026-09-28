@@ -208,6 +208,19 @@ def backend() -> str:
     return "agy" if agy.available() else "gemini"
 
 
+def available() -> bool:
+    """Whether any judge can actually run, which is what the UI greys its button on.
+
+    A key is not the only way in: the agy backend authenticates with a signed-in Google
+    account, so keying off GEMINI_API_KEY alone reports "no judge" on a machine where
+    judging works fine.
+    """
+    if backend() == "agy":
+        from . import agy
+        return agy.available()
+    return bool(os.environ.get(API_KEY_ENV))
+
+
 def judge_all(video: Path, candidates: Sequence[Candidate], query: str):
     """One entry per candidate, in order: a Verdict, or the ReelsError for that span.
 

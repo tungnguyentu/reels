@@ -10,7 +10,6 @@ Binds to loopback and serves files only from within the roots it was configured 
 from __future__ import annotations
 
 import hashlib
-import os
 import subprocess
 import tempfile
 import uuid
@@ -28,6 +27,7 @@ from pydantic import BaseModel, Field
 from . import ReelsError
 from . import index as index_mod
 from . import judge as judge_mod
+from . import packaging as packaging_mod
 from . import render as render_mod
 from . import search as search_mod
 from .judge import CROP, PILLARBOX
@@ -112,6 +112,40 @@ class IndexIn(BaseModel):
     video: str
 
 
+class PackageTitlesIn(BaseModel):
+    clip: str
+    steer: str = ""
+    query: str | None = None
+
+
+class PackageDescriptionIn(BaseModel):
+    clip: str
+    title: str = Field(min_length=1)
+    query: str | None = None
+
+
+class PackageCoversIn(BaseModel):
+    clip: str
+    cover_text: str = Field(min_length=1)
+    count: int = Field(3, ge=1, le=10)
+
+
+class PackageTitleIn(BaseModel):
+    title: str
+    cover_text: str
+    reason: str = ""
+    frame_index: int = Field(ge=0)
+
+
+class PackageExportIn(BaseModel):
+    clip: str
+    title: str = Field(min_length=1)
+    description: str = ""
+    cover: str | None = None
+    titles: list[PackageTitleIn] = Field(default_factory=list)
+    covers: list[str] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------- app
 
 def create_app(settings: Settings) -> FastAPI:
@@ -158,7 +192,8 @@ def create_app(settings: Settings) -> FastAPI:
             "library": str(settings.library),
             "music_dir": str(settings.music_dir),
             "out_dir": str(settings.out_dir),
-            "judge_available": judge_mod.API_KEY_ENV in os.environ,
+            "judge_available": judge_mod.available(),
+            "judge_backend": judge_mod.backend(),
             "reframe_modes": [CROP, PILLARBOX],
             "defaults": {
                 "min_seconds": search_mod.DEFAULT_MIN_SECONDS,
@@ -267,21 +302,23 @@ def create_app(settings: Settings) -> FastAPI:
         video = resolve(body.video, settings.library)
 
         def work() -> list[dict]:
+            # judge_all, not judge: it picks the backend, and the agy one answers a whole
+            # batch per invocation. Looping judge() here would take one agy call per range.
+            candidates = [item.to_candidate() for item in body.ranges]
             out = []
-            for item in body.ranges:
-                candidate = item.to_candidate()
-                try:
-                    verdict = judge_mod.judge(video, candidate, body.query)
+            for candidate, outcome in zip(candidates,
+                                          judge_mod.judge_all(video, candidates, body.query)):
+                if isinstance(outcome, ReelsError):
                     out.append({
                         "start": candidate.start, "end": candidate.end,
-                        "accepted": verdict.accepted, "reason": verdict.reason,
-                        "focal_x": verdict.focal_x, "reframe": verdict.reframe,
-                    })
-                except ReelsError as exc:
-                    out.append({
-                        "start": candidate.start, "end": candidate.end,
-                        "accepted": None, "reason": str(exc),
+                        "accepted": None, "reason": str(outcome),
                         "focal_x": None, "reframe": None,
+                    })
+                else:
+                    out.append({
+                        "start": candidate.start, "end": candidate.end,
+                        "accepted": outcome.accepted, "reason": outcome.reason,
+                        "focal_x": outcome.focal_x, "reframe": outcome.reframe,
                     })
             return out
 
@@ -303,6 +340,68 @@ def create_app(settings: Settings) -> FastAPI:
         job = submit("render", f"rendering {len(treatments)} variants", work)
         return {"job": job.id}
 
+    def package_query(clip: Path, supplied: str | None) -> str:
+        query_path = clip.with_suffix(".query")
+        if query_path.is_file():
+            return query_path.read_text(encoding="utf-8")
+        if supplied and supplied.strip():
+            return supplied
+        raise HTTPException(400, f"no query sidecar or supplied query for {clip.name}")
+
+    @app.post("/api/package/titles")
+    def package_titles(body: PackageTitlesIn) -> dict:
+        clip = resolve(body.clip, settings.out_dir)
+        query = package_query(clip, body.query)
+
+        def work() -> list[dict]:
+            samples = packaging_mod.sample_frames(clip)
+            titles = packaging_mod.generate_titles(samples, query, steer=body.steer)
+            return [{"title": item.title, "cover_text": item.cover_text, "reason": item.reason,
+                     "frame_index": item.frame_index} for item in titles]
+
+        return {"job": submit("package titles", f"proposing titles for {clip.name}", work).id}
+
+    @app.post("/api/package/description")
+    def package_description(body: PackageDescriptionIn) -> dict:
+        clip = resolve(body.clip, settings.out_dir)
+        query = package_query(clip, body.query)
+
+        def work() -> str:
+            samples = packaging_mod.sample_frames(clip)
+            return packaging_mod.generate_description(samples, query, body.title)
+
+        return {"job": submit("package description", f"writing a description for {clip.name}", work).id}
+
+    @app.post("/api/package/covers")
+    def package_covers(body: PackageCoversIn) -> dict:
+        clip = resolve(body.clip, settings.out_dir)
+        staging = settings.out_dir / f"{clip.stem}.package.tmp"
+
+        def work() -> list[str]:
+            covers = packaging_mod.make_covers(clip, packaging_mod.sample_frames(clip), body.cover_text,
+                                               staging, body.count)
+            return [cover.relative_to(settings.out_dir).as_posix() for cover in covers]
+
+        return {"job": submit("package covers", f"building covers for {clip.name}", work).id}
+
+    @app.post("/api/package/export")
+    def package_export(body: PackageExportIn) -> dict:
+        clip = resolve(body.clip, settings.out_dir)
+        cover = resolve(body.cover, settings.out_dir) if body.cover else None
+        covers = [resolve(name, settings.out_dir) for name in body.covers]
+        titles = [packaging_mod.Title(item.title, item.cover_text, item.reason, item.frame_index)
+                  for item in body.titles]
+
+        def work() -> str:
+            package = packaging_mod.Package(body.title, body.description, titles, cover, covers)
+            return str(packaging_mod.write_bundle(clip, package, settings.out_dir))
+
+        return {"job": submit("package export", f"exporting {clip.name}", work).id}
+
+    @app.get("/media/package")
+    def package_media(name: str) -> FileResponse:
+        return FileResponse(resolve(name, settings.out_dir), media_type="image/jpeg")
+
     @app.get("/api/jobs/{job_id}")
     def job_status(job_id: str) -> dict:
         job = state.jobs.get(job_id)
@@ -316,7 +415,9 @@ def create_app(settings: Settings) -> FastAPI:
         if not settings.out_dir.is_dir():
             return []
         found = sorted(settings.out_dir.glob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
-        return [{"name": p.name, "size": p.stat().st_size, "mtime": p.stat().st_mtime}
+        return [{"name": p.name, "size": p.stat().st_size, "mtime": p.stat().st_mtime,
+                 "query": p.with_suffix(".query").read_text(encoding="utf-8")
+                 if p.with_suffix(".query").is_file() else None}
                 for p in found]
 
     @app.get("/media/clip")
