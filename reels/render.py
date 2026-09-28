@@ -18,7 +18,10 @@ from .search import Candidate
 
 OUTPUT_WIDTH = 1080
 OUTPUT_HEIGHT = 1920
-OUTPUT_FPS = 30  # inside the range both Instagram Reels and YouTube Shorts accept
+MAX_OUTPUT_FPS = 60  # the ceiling both Instagram Reels and YouTube Shorts accept
+# Not a fixed 30. Forcing 30 threw away every second frame of a 60fps capture, which reads
+# as judder in anything with fast camera motion and cannot be recovered later. The source
+# rate is kept instead, capped at what the platforms take.
 FADE_SECONDS = 1.5
 BLUR_SIGMA = 40
 VIDEO_CRF = "20"
@@ -57,6 +60,26 @@ def probe_size(video: Path) -> tuple[int, int]:
     )
     stream = json.loads(out)["streams"][0]
     return int(stream["width"]), int(stream["height"])
+
+
+def output_fps(video: Path) -> int:
+    """The source frame rate, capped at MAX_OUTPUT_FPS.
+
+    r_frame_rate is a rational ("60/1"), and is 0/0 on a stream ffprobe cannot read; both
+    fall back to 30 rather than failing the render, since a wrong frame rate is a worse
+    outcome than a conservative one.
+    """
+    out = run_tool(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+         "stream=r_frame_rate", "-of", "csv=p=0", str(video)],
+        what=f"reading the frame rate of {Path(video).name}",
+    )
+    try:
+        num, _, den = out.strip().partition("/")
+        rate = float(num) / float(den or 1)
+    except (ValueError, ZeroDivisionError):
+        return 30
+    return max(1, min(MAX_OUTPUT_FPS, round(rate))) if rate > 0 else 30
 
 
 def crop_window(
@@ -141,7 +164,7 @@ def render(
          "-af", (f"afade=t=out:st={fade_start:.3f}:d={FADE_SECONDS},"
                  f"alimiter=limit={LIMITER_CEILING}"),
          "-t", f"{duration:.3f}",
-         "-r", str(OUTPUT_FPS), "-c:v", "libx264", "-crf", VIDEO_CRF, "-preset", VIDEO_PRESET,
+         "-r", str(output_fps(video)), "-c:v", "libx264", "-crf", VIDEO_CRF, "-preset", VIDEO_PRESET,
          "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", AUDIO_BITRATE,
          str(destination), "-y",
     ]

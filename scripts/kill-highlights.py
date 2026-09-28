@@ -43,7 +43,9 @@ MIN_EVENT = 0.25
 
 PRE_ROLL = 3.0  # the banner appears AFTER the kill; the shot that earned it is before
 POST_ROLL = 1.5
-OUT_W, OUT_H, OUT_FPS = 1080, 1920, 30
+OUT_W, OUT_H = 1080, 1920
+MAX_FPS = 60  # keep the source rate up to here; forcing 30 halves a 60fps capture and
+# shows up as judder exactly where a shooter needs it least -- fast camera movement.
 GAME_VOLUME, MUSIC_VOLUME = 0.55, 0.85
 
 
@@ -55,13 +57,19 @@ def run(cmd: list[str]) -> str:
     return proc.stdout
 
 
-def probe(video: Path) -> tuple[int, int, float]:
+def probe(video: Path) -> tuple[int, int, float, int]:
     out = run(["ffprobe", "-v", "error", "-select_streams", "v:0",
-               "-show_entries", "stream=width,height", "-show_entries", "format=duration",
-               "-of", "json", str(video)])
+               "-show_entries", "stream=width,height,r_frame_rate",
+               "-show_entries", "format=duration", "-of", "json", str(video)])
     d = json.loads(out)
     st = d["streams"][0]
-    return int(st["width"]), int(st["height"]), float(d["format"]["duration"])
+    try:
+        num, _, den = str(st.get("r_frame_rate", "")).partition("/")
+        rate = float(num) / float(den or 1)
+        fps = max(1, min(MAX_FPS, round(rate))) if rate > 0 else 30
+    except (ValueError, ZeroDivisionError):
+        fps = 30  # unreadable rate: a conservative one beats failing the whole build
+    return int(st["width"]), int(st["height"]), float(d["format"]["duration"]), fps
 
 
 def banner_features(path: Path) -> tuple[float, int]:
@@ -81,7 +89,7 @@ class Kill:
 
 def detect(video: Path, region: tuple[float, float, float, float], fps: float,
            min_edges: int, max_fraction: float, workdir: Path) -> list[Kill]:
-    w, h, _ = probe(video)
+    w, h, _, _ = probe(video)
     rx, ry, rw, rh = region
     crop = f"{max(2, round(rw * w))}:{max(2, round(rh * h))}:{round(rx * w)}:{round(ry * h)}"
     frames = workdir / "zone"
@@ -158,7 +166,7 @@ def rank_by_appeal(video: Path, kills: list[Kill], pre: float, post: float,
 
 def contact_sheet(video: Path, kills: list[Kill], region, dest: Path, workdir: Path) -> Path:
     """One tile per detection, so a human can reject bad ones before any encoding."""
-    w, h, _ = probe(video)
+    w, h, _, _ = probe(video)
     rx, ry, _rw, _rh = region
     # A generous band around the zone, so the whole banner is readable in the sheet.
     bx, by = round(rx * w) - 420, round(ry * h) - 15
@@ -179,7 +187,7 @@ def contact_sheet(video: Path, kills: list[Kill], region, dest: Path, workdir: P
 
 def build(video: Path, kills: list[Kill], out: Path, music: Path | None,
           pre: float, post: float, workdir: Path) -> Path:
-    w, h, duration = probe(video)
+    w, h, duration, fps = probe(video)
     crop_w = min(w, round(h * OUT_W / OUT_H))
     crop_w -= crop_w % 2
     crop_x = (w - crop_w) // 2
@@ -196,8 +204,8 @@ def build(video: Path, kills: list[Kill], out: Path, music: Path | None,
         run(["ffmpeg", "-nostdin", "-v", "error", "-ss", f"{start:.3f}", "-t", f"{length:.3f}",
              "-i", str(video),
              "-vf", f"crop={crop_w}:{h}:{crop_x}:0,scale={OUT_W}:{OUT_H}:flags=lanczos,setsar=1",
-             "-c:v", "libx264", "-crf", "20", "-preset", "veryfast", "-pix_fmt", "yuv420p",
-             "-r", str(OUT_FPS), "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
+             "-c:v", "libx264", "-crf", "20", "-preset", "medium", "-pix_fmt", "yuv420p",
+             "-r", str(fps), "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
              str(seg), "-y"])
         made.append(seg)
     if not made:

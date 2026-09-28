@@ -205,7 +205,7 @@ def test_output_duration_matches_the_range(fixture_video, music_dir, tmp_path):
         "forest", music_dir=music_dir, out_dir=tmp_path / "out",
     )
     duration = float(probe(out, "format=duration")["format"]["duration"])
-    assert abs(duration - 8.0) < 1.0 / rnd.OUTPUT_FPS + 0.1
+    assert abs(duration - 8.0) < 1.0 / rnd.MAX_OUTPUT_FPS + 0.1
 
 
 def test_clip_longer_than_the_track_still_has_continuous_audio(fixture_video, music_dir, tmp_path):
@@ -237,3 +237,34 @@ def test_zero_length_range_is_rejected(fixture_video, music_dir, tmp_path):
             fixture_video, Candidate(10.0, 10.0, 0.3), Verdict(True, "v", 0.5, CROP),
             "forest", music_dir=music_dir, out_dir=tmp_path / "out",
         )
+
+
+def test_a_60fps_source_is_not_halved(fixture_video, monkeypatch):
+    """Forcing 30 threw away every second frame and read as judder on fast motion."""
+    from reels import render as render_mod
+
+    monkeypatch.setattr(render_mod, "run_tool", lambda *a, **k: "60/1")
+    assert render_mod.output_fps(fixture_video) == 60
+
+
+def test_the_frame_rate_is_capped_at_what_the_platforms_take(fixture_video, monkeypatch):
+    from reels import render as render_mod
+
+    monkeypatch.setattr(render_mod, "run_tool", lambda *a, **k: "120/1")
+    assert render_mod.output_fps(fixture_video) == render_mod.MAX_OUTPUT_FPS
+
+
+def test_an_unreadable_frame_rate_falls_back_rather_than_failing(fixture_video, monkeypatch):
+    """A wrong rate is a worse outcome than a conservative one, but neither is a crash."""
+    from reels import render as render_mod
+
+    for raw in ("0/0", "", "N/A", "abc"):
+        monkeypatch.setattr(render_mod, "run_tool", lambda *a, _r=raw, **k: _r)
+        assert render_mod.output_fps(fixture_video) == 30, raw
+
+
+def test_the_real_fixture_reports_its_own_rate(fixture_video):
+    """No stub: the probe must actually parse what ffprobe prints."""
+    from reels import render as render_mod
+
+    assert 1 <= render_mod.output_fps(fixture_video) <= render_mod.MAX_OUTPUT_FPS
