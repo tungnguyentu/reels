@@ -28,6 +28,11 @@ uv run reels index recording.mp4
 uv run reels clip recording.mp4 "a wide forest landscape" --shortlist 6
 ```
 
+`REELS_JUDGE_BACKEND` picks the judge: `gemini` (API key) or `agy` (the Antigravity
+CLI, which uses a signed-in Google account instead of a key). Unset, it auto-detects --
+so the test suite pins it, or the suite would take a different path on a machine that
+happens to have `agy` installed.
+
 `REELS_JUDGE_MODEL` overrides the vision model. The default is the `gemini-flash-latest`
 alias rather than a pinned id, because a pinned version goes stale silently.
 
@@ -77,6 +82,16 @@ different wall time on a variable-GOP recording.
 and archive extraction preserve mtime) and the model name plus pretrained tag (embeddings
 from another checkpoint live in a different space and score as confident nonsense rather
 than failing).
+
+**The agy backend batches; the Gemini one does not.** `agy` is an agent, not an API
+client: each invocation re-reads its harness context, so one image costs ~287k tokens and
+~114s while six cost 84k and 28s. `agy.judge_ranges()` therefore writes a batch of spans'
+frames into one temp dir and asks for all their verdicts at once, binding each verdict to
+its span by an explicit `range` index rather than by reply order. An unanswered span is
+raised as a named error, never returned as a rejection -- "the model did not answer" and
+"the footage is unusable" must not collapse into the same outcome. `judge_all()` in
+`judge.py` returns `Verdict | ReelsError` per candidate rather than raising, which is what
+preserves the CLI's per-range error isolation.
 
 **The UI inverts the judge's role, and that is the point.** `api.py` keeps search and
 judging as separate endpoints: search and thumbnails are free and need no key, judging is

@@ -64,23 +64,21 @@ def cmd_clip(args: argparse.Namespace) -> int:
         return 0
 
     _say(f"{len(found)} candidate ranges ({len(tracks)} music tracks); "
-         f"asking the vision model about each")
+         f"asking the {judge_mod.backend()} judge about each")
     accepted: list[tuple[search.Candidate, judge_mod.Verdict]] = []
     rejected: list[str] = []
     errored: list[str] = []
-    for candidate in found:
+    # judge_all returns a Verdict or that span's error, so one failure never discards
+    # the spans that succeeded.
+    for candidate, outcome in zip(found, judge_mod.judge_all(video, found, args.query)):
         span = f"{candidate.start:.0f}-{candidate.end:.0f}s"
-        try:
-            verdict = judge_mod.judge(video, candidate, args.query)
-        except ReelsError as exc:
-            # One failed range does not throw away the ranges that already succeeded.
-            errored.append(f"  {span}: {exc}")
-            continue
-        if verdict.accepted:
-            accepted.append((candidate, verdict))
-            _say(f"  {span}: accepted ({verdict.reframe})")
+        if isinstance(outcome, ReelsError):
+            errored.append(f"  {span}: {outcome}")
+        elif outcome.accepted:
+            accepted.append((candidate, outcome))
+            _say(f"  {span}: accepted ({outcome.reframe})")
         else:
-            rejected.append(f"  {span}: {verdict.reason}")
+            rejected.append(f"  {span}: {outcome.reason}")
 
     if not accepted:
         _say(f'no usable clip for "{args.query}" in {video.name}.')

@@ -17,15 +17,16 @@ from pathlib import Path
 
 import numpy as np
 
-from . import ReelsError, run_tool
+from . import ReelsError
+from .frames import grab_frame
 from .search import Candidate
 
+BACKEND_ENV = "REELS_JUDGE_BACKEND"  # "gemini" (default) or "agy"
 API_KEY_ENV = "GEMINI_API_KEY"
 MODEL_ENV = "REELS_JUDGE_MODEL"
 DEFAULT_MODEL = "gemini-flash-latest"  # an alias, not a pinned id: a hardcoded version
 # goes stale silently and the failure only shows up as a dead run months later.
 FRAMES_PER_RANGE = 3
-SAMPLE_WIDTH = 768
 RETRY_ATTEMPTS = 3
 RETRY_BACKOFF = 4.0  # seconds before the first retry, doubling after that
 # Codes worth another attempt: throttling, and the server-side capacity errors a free
@@ -81,18 +82,6 @@ class Verdict:
     reason: str
     focal_x: float | None = None
     reframe: str | None = None
-
-
-def grab_frame(video: Path, at: float) -> bytes:
-    """One JPEG at a timestamp. Used for judge input and for UI thumbnails."""
-    jpeg = run_tool(
-        ["ffmpeg", "-v", "error", "-ss", f"{at:.3f}", "-i", str(video), "-frames:v", "1",
-         "-vf", f"scale={SAMPLE_WIDTH}:-2", "-f", "image2", "-c:v", "mjpeg", "-"],
-        text=False, what=f"reading a frame at {at:.1f}s from {video.name}",
-    )
-    if not jpeg:
-        raise ReelsError(f"no frame at {at:.1f}s in {video.name}")
-    return jpeg
 
 
 def sample_frames(video: Path, candidate: Candidate, count: int = FRAMES_PER_RANGE) -> list[bytes]:
@@ -200,3 +189,44 @@ def _to_verdict(payload: object) -> Verdict:
 def judge(video: Path, candidate: Candidate, query: str, *, ask: Asker | None = None) -> Verdict:
     frames = sample_frames(video, candidate)
     return _to_verdict((ask or _ask_gemini)(frames, PROMPT.format(query=query)))
+
+
+def backend() -> str:
+    """Which judge backend to use.
+
+    Explicit choice wins. Otherwise prefer the direct API when a key exists -- it is far
+    cheaper per range than the agent CLI -- and fall back to `agy`, which needs no key of
+    its own because it uses the Google account you signed into once.
+    """
+    chosen = os.environ.get(BACKEND_ENV, "").strip().lower()
+    if chosen in ("gemini", "agy"):
+        return chosen
+    if os.environ.get(API_KEY_ENV):
+        return "gemini"
+    from . import agy
+    return "agy" if agy.available() else "gemini"
+
+
+def judge_all(video: Path, candidates: Sequence[Candidate], query: str):
+    """One entry per candidate, in order: a Verdict, or the ReelsError for that span.
+
+    Errors are returned rather than raised so one unjudgeable span cannot discard the
+    spans that succeeded -- the same contract the CLI has always had. Batched where the
+    backend benefits: `agy` carries its whole harness context per invocation, so judging
+    ranges one at a time costs it roughly six times as long.
+    """
+    if not candidates:
+        return []
+    if backend() == "agy":
+        from . import agy
+        try:
+            return list(agy.judge_ranges(Path(video), list(candidates), query))
+        except ReelsError as exc:
+            return [exc] * len(candidates)  # agy answers a batch or none of it
+    out = []
+    for candidate in candidates:
+        try:
+            out.append(judge(video, candidate, query))
+        except ReelsError as exc:
+            out.append(exc)
+    return out

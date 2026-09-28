@@ -7,6 +7,17 @@ import pytest
 FIXTURE = Path(__file__).parent / "fixtures" / "forest-90s.mp4"
 
 
+@pytest.fixture(autouse=True)
+def pinned_judge_backend(monkeypatch):
+    """Pin the judge backend for every test.
+
+    judge.backend() auto-detects, so without this the suite would take the agy path on a
+    machine where agy happens to be installed and the gemini path elsewhere -- the tests
+    would depend on the host. Tests that exercise agy set the variable themselves.
+    """
+    monkeypatch.setenv("REELS_JUDGE_BACKEND", "gemini")
+
+
 @pytest.fixture
 def fixture_video(tmp_path):
     """A copy of the fixture, so tests may write an index beside it without dirtying the tree."""
