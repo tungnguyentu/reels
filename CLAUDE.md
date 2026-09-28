@@ -39,6 +39,7 @@ A linear pipeline, one module per stage, plus two layers that sit on top of it:
 index.py -> search.py -> judge.py -> render.py
                                          ^
                      variants.py --------'     several treatments of one moment
+                                      packaging.py --> post-ready export bundle
         cli.py --+-- api.py -- web/            two front ends over one pipeline
 ```
 
@@ -87,6 +88,11 @@ trim) becomes a synthetic `Verdict`, so `render()` needs no knowledge of variant
 resolution and the treatment cap are checked before the first encode, because each
 treatment is a full re-encode and failing on the fourth of five wastes minutes.
 
+**`packaging.py` sits above `render.py`.** It must not import `index.py`. Shared frame access
+is in `frames.py`. Packaging samples source frames when the render sidecar can resolve them,
+then falls back to the clip. Covers use a vendored font and JPEG, because JPEG can reduce
+quality to stay under 2 MB while PNG cannot.
+
 **Every path arriving from the browser goes through `resolve()` in `api.py`**, which
 checks membership in a configured root *after* resolving symlinks rather than inspecting
 the string for `..`. Long work runs on a small pool with polled job status; any escaping
@@ -128,3 +134,9 @@ real failure was observed, so check the test before deleting a guard that looks 
   build on a no-op install. npm runs it, and contributors are likelier to have it.
 - `CropPreview` derives the 9:16 window width from the thumbnail's own natural aspect
   ratio, so it is correct for any source without asking the server for dimensions.
+- `ffmpeg` reads stdin, so it eats the remaining lines of a `while read` loop. Pass
+  `-nostdin` in any shell loop that pipes a list into it.
+- `scripts/kill-highlights.py` is deliberately outside `reels/`: it is pixel detection on
+  a game HUD, not semantic search, and it shares no code with the pipeline. CLIP cannot do
+  this job — the killfeed is smaller than its 224px input and a shooter's similarity curve
+  is flat because every frame is shooting.

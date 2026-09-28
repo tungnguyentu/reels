@@ -113,6 +113,26 @@ per variant. Render them all and choose the one you'd post.
 That inverts the judge's role. It is the least reliable part of the pipeline, and in the
 UI it stops being load-bearing.
 
+## Shooter kill reels
+
+`reels clip` is semantic search, and it cannot find kills in a shooter: the killfeed is
+too small for CLIP's 224px input, and a whole match looks like "shooting" to it, so the
+similarity curve is flat. A separate script detects the banner the game itself draws:
+
+```bash
+scripts/kill-highlights.py match.mp4 --check     # contact sheet of detections, no encoding
+scripts/kill-highlights.py match.mp4 -o out/     # stitch them into one vertical reel
+```
+
+The discriminator is that banner text is red **and full of edges**, while a damage flash
+is a uniform red slab. On a 5-minute Warzone capture that found 17 of 18 kills with no
+false positives. Defaults target 1920x1080 Warzone; another game or HUD scale needs
+`--region`, and `--check` is how you tune it.
+
+By default the game audio is kept and no music is added — for TikTok, a trending in-app
+sound beats a baked-in track for both licensing and reach. Use `--music` when you do want
+one mixed in.
+
 ## Limitations
 
 Worth knowing before you rely on it:
