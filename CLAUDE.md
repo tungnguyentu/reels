@@ -165,4 +165,11 @@ real failure was observed, so check the test before deleting a guard that looks 
 - `scripts/kill-highlights.py` is deliberately outside `reels/`: it is pixel detection on
   a game HUD, not semantic search, and it shares no code with the pipeline. CLIP cannot do
   this job — the killfeed is smaller than its 224px input and a shooter's similarity curve
-  is flat because every frame is shooting.
+  is flat because every frame is shooting. Measured on one 314s match: the detector found
+  all 17 kills spread across the whole recording, while `reels clip --all` returned tiles
+  covering 4–154s, because a flat curve puts everything over the threshold.
+- **`/api/kills` shells out to that script, and must keep shelling out.** Importing it
+  would pull HUD pixel matching into the package it was separated from. It is exposed as
+  its own UI action rather than as a search backend for the same reason: a query cannot
+  reach these moments, and folding it into search would imply it can. The script's
+  `--json` exists for this caller; under it, no kills is exit 0 with an empty list.
