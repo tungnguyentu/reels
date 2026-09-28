@@ -123,3 +123,20 @@ def test_ranges_never_extend_past_the_end_of_the_recording():
     idx = make_index([0.1] * 10 + [0.9] * 20)
     for candidate in run(idx):
         assert candidate.end <= idx.duration + 1e-6
+
+
+def test_shortlist_none_lifts_the_cap():
+    """--all bounds nothing: every range that cleared the thresholds comes back."""
+    # Three separated peaks, so there is more to find than a cap of two admits.
+    idx = make_index([0.1] * 5 + [0.9] * 5 + [0.1] * 5 + [0.8] * 5 + [0.1] * 5 + [0.7] * 5)
+    capped = run(idx, shortlist=2)
+    every = run(idx, shortlist=None)
+    assert len(capped) == 2
+    assert len(every) == 3
+    assert capped == every[:2], "lifting the cap must not reorder what was already ranked"
+
+
+def test_lifting_the_cap_does_not_lower_the_bar():
+    """The floor still decides. --all must not turn a hopeless query into candidates."""
+    idx = make_index([0.1] * 5 + [0.9] * 5 + [0.1] * 5)
+    assert run(idx, shortlist=None, floor=0.99) == []

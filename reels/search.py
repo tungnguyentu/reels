@@ -145,10 +145,15 @@ def candidates(
     encoder: TextEncoder | None = None,
     min_seconds: float = DEFAULT_MIN_SECONDS,
     max_seconds: float = DEFAULT_MAX_SECONDS,
-    shortlist: int = DEFAULT_SHORTLIST,
+    shortlist: int | None = DEFAULT_SHORTLIST,
     floor: float = DEFAULT_FLOOR,
 ) -> list[Candidate]:
-    """Ranked candidate ranges for a query, or an empty list when nothing matches at all."""
+    """Ranked candidate ranges for a query, or an empty list when nothing matches at all.
+
+    `shortlist=None` returns every range that cleared the thresholds. The cap exists to
+    bound judge calls, not to bound what was found, so lifting it changes cost rather
+    than recall -- the floor and the hysteresis thresholds still decide what qualifies.
+    """
     scores = score(index, query, encoder)
     if scores.size == 0 or scores.max() < floor:
         return []
@@ -168,4 +173,4 @@ def candidates(
         ))
 
     found.sort(key=lambda c: c.peak, reverse=True)
-    return found[:shortlist]
+    return found if shortlist is None else found[:shortlist]

@@ -52,7 +52,7 @@ def cmd_clip(args: argparse.Namespace) -> int:
         args.query,
         min_seconds=args.min_seconds,
         max_seconds=args.max_seconds,
-        shortlist=args.shortlist,
+        shortlist=None if args.take_all else args.shortlist,
         floor=args.floor,
     )
     if not found:
@@ -157,6 +157,11 @@ def build_parser() -> argparse.ArgumentParser:
     clip_cmd.add_argument("--min-seconds", type=float, default=search.DEFAULT_MIN_SECONDS)
     clip_cmd.add_argument("--max-seconds", type=float, default=search.DEFAULT_MAX_SECONDS)
     clip_cmd.add_argument("--shortlist", type=int, default=search.DEFAULT_SHORTLIST)
+    clip_cmd.add_argument(
+        "--all", dest="take_all", action="store_true",
+        help="judge and render every matching range, not just the top --shortlist. "
+             "Cost scales with what the query matches, so check `reels search` first.",
+    )
     clip_cmd.add_argument("--floor", type=float, default=search.DEFAULT_FLOOR,
                           help="minimum peak similarity before any range is emitted")
     clip_cmd.add_argument("--music-dir", default=str(DEFAULT_MUSIC_DIR))
