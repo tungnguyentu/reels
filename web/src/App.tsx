@@ -45,13 +45,16 @@ export default function App() {
   const run = async (kind: typeof busy, fn: () => Promise<void>) => {
     setBusy(kind);
     setError(null);
+    // Cleared here, at the start, and NOT in the finally block: clearing on completion
+    // wiped the line each action writes when it succeeds, so a job that worked looked
+    // exactly like one that never ran.
+    setStatus("");
     try {
       await fn();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy("");
-      setStatus("");
     }
   };
 

@@ -298,7 +298,11 @@ def main() -> int:
                   file=sys.stderr)
             return 0
 
-        out = build(args.video, kills, args.out_dir / f"{args.video.stem}-kill-highlights.mp4",
+        # The selection goes in the name: a --best run must not overwrite the full reel,
+        # and two selections must not overwrite each other.
+        picked = f"-best{args.best}" if args.best else f"-first{args.max_clips}" if args.max_clips else ""
+        out = build(args.video, kills,
+                    args.out_dir / f"{args.video.stem}-kill-highlights{picked}.mp4",
                     args.music, args.pre, args.post, workdir)
         if args.json:
             print(json.dumps({"kills": [k.start for k in kills], "output": str(out)}))

@@ -332,3 +332,19 @@ def test_the_fields_the_browser_actually_sends_are_all_accepted(client):
     ]
     for path, body in sent:
         assert c.post(path, json=body).status_code != 422, f"{path} rejected its own client"
+
+
+def test_a_selection_gets_its_own_filename(client, monkeypatch):
+    """--best must not overwrite the full reel, nor one selection another."""
+    c, video = client
+    seen = {}
+
+    def spy(cmd, **kw):
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, '{"kills": [], "output": null}\n', "")
+
+    monkeypatch.setattr(api_mod.subprocess, "run", spy)
+    for body, flag in (({"best": 8}, "--best"), ({"max_clips": 4}, "--max-clips")):
+        job = c.post("/api/kills", json={"video": video.name, **body}).json()["job"]
+        assert wait(c, job)["status"] == "done"
+        assert flag in seen["cmd"]
