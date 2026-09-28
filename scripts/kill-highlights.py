@@ -41,8 +41,9 @@ MAX_RED_FRACTION = 0.60  # above this the zone is a flash, not text
 EVENT_GAP = 2.5  # seconds of quiet that ends one banner
 MIN_EVENT = 0.25
 
-PRE_ROLL = 3.0  # the banner appears AFTER the kill; the shot that earned it is before
-POST_ROLL = 1.5
+PRE_ROLL = 4.0  # the banner appears AFTER the kill; the shot that earned it is before
+POST_ROLL = 2.0
+MERGE_GAP = 2.0  # windows closer than this become one continuous shot -- see windows()
 OUT_W, OUT_H = 1080, 1920
 MAX_FPS = 60  # keep the source rate up to here; forcing 30 halves a 60fps capture and
 # shows up as judder exactly where a shooter needs it least -- fast camera movement.
@@ -164,6 +165,35 @@ def rank_by_appeal(video: Path, kills: list[Kill], pre: float, post: float,
     return sorted(best, key=lambda k: k.start)
 
 
+def windows(kills: list[Kill], pre: float, post: float, duration: float,
+            merge_gap: float = MERGE_GAP) -> list[tuple[float, float]]:
+    """(start, end) per clip, with runs of nearby kills merged into one shot.
+
+    A double or triple kill lands several banners a few seconds apart. Cut one window per
+    banner, the windows overlap, and the reel replays the same seconds while dropping the
+    fraction of a second between them -- a streak reads as three chopped fragments rather
+    than one run. Merging them keeps the streak as it actually happened, which is the part
+    worth watching.
+
+    A window that runs past either end of the recording is extended the other way instead
+    of being emitted short, so a kill in the opening seconds is not a two-second stub.
+    """
+    spans: list[tuple[float, float]] = []
+    for kill in kills:
+        start, end = kill.start - pre, kill.start + post
+        if start < 0.0:
+            start, end = 0.0, min(duration, end - start)
+        if end > duration:
+            start, end = max(0.0, start - (end - duration)), duration
+        if end - start <= 0:
+            continue
+        if spans and start - spans[-1][1] <= merge_gap:
+            spans[-1] = (spans[-1][0], max(spans[-1][1], end))
+        else:
+            spans.append((start, end))
+    return spans
+
+
 def contact_sheet(video: Path, kills: list[Kill], region, dest: Path, workdir: Path) -> Path:
     """One tile per detection, so a human can reject bad ones before any encoding."""
     w, h, _, _ = probe(video)
@@ -186,7 +216,7 @@ def contact_sheet(video: Path, kills: list[Kill], region, dest: Path, workdir: P
 
 
 def build(video: Path, kills: list[Kill], out: Path, music: Path | None,
-          pre: float, post: float, workdir: Path) -> Path:
+          pre: float, post: float, workdir: Path, merge_gap: float = MERGE_GAP) -> Path:
     w, h, duration, fps = probe(video)
     crop_w = min(w, round(h * OUT_W / OUT_H))
     crop_w -= crop_w % 2
@@ -195,11 +225,12 @@ def build(video: Path, kills: list[Kill], out: Path, music: Path | None,
     segs = workdir / "segs"
     segs.mkdir(parents=True, exist_ok=True)
     made = []
-    for i, k in enumerate(kills, 1):
-        start = max(0.0, k.start - pre)
-        length = min(duration, k.start + post) - start
-        if length <= 0:
-            continue
+    spans = windows(kills, pre, post, duration, merge_gap)
+    if len(spans) < len(kills):
+        print(f"{len(kills)} kills -> {len(spans)} shots "
+              f"({len(kills) - len(spans)} merged into a streak)", file=sys.stderr)
+    for i, (start, end) in enumerate(spans, 1):
+        length = end - start
         seg = segs / f"s_{i:03d}.mp4"
         run(["ffmpeg", "-nostdin", "-v", "error", "-ss", f"{start:.3f}", "-t", f"{length:.3f}",
              "-i", str(video),
@@ -248,6 +279,10 @@ def main() -> int:
     p.add_argument("--pre", type=float, default=PRE_ROLL,
                    help="seconds before the banner -- the kill happens here (default 3.0)")
     p.add_argument("--post", type=float, default=POST_ROLL)
+    p.add_argument("--merge-gap", type=float, default=MERGE_GAP,
+                   help="kills whose windows sit within this many seconds of each other "
+                        "become one continuous shot (default 2.0). 0 still merges "
+                        "windows that overlap, since replaying those seconds is worse")
     p.add_argument("--max-clips", type=int, default=0,
                    help="keep only the first N kills (0 = all)")
     p.add_argument("--best", type=int, default=0, metavar="N",
@@ -311,7 +346,7 @@ def main() -> int:
         picked = f"-best{args.best}" if args.best else f"-first{args.max_clips}" if args.max_clips else ""
         out = build(args.video, kills,
                     args.out_dir / f"{args.video.stem}-kill-highlights{picked}.mp4",
-                    args.music, args.pre, args.post, workdir)
+                    args.music, args.pre, args.post, workdir, args.merge_gap)
         if args.json:
             print(json.dumps({"kills": [k.start for k in kills], "output": str(out)}))
             return 0
