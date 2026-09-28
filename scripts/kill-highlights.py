@@ -203,6 +203,10 @@ def main() -> int:
                    help="banner zone as x,y,w,h fractions of the frame (see --check)")
     p.add_argument("--check", action="store_true",
                    help="write a contact sheet of detections and stop, encoding nothing")
+    p.add_argument("--json", action="store_true",
+                   help="print one JSON object on stdout for a caller to parse. Finding no "
+                        "kills is then a result rather than exit 1: an empty list, not a "
+                        "failure the caller has to tell apart from a broken run.")
     args = p.parse_args()
 
     if not args.video.is_file():
@@ -225,6 +229,9 @@ def main() -> int:
                   f"-{k.start + args.post:.1f}s)", file=sys.stderr)
         if not kills:
             print("nothing detected -- try --check with a different --region", file=sys.stderr)
+            if args.json:
+                print(json.dumps({"kills": [], "output": None}))
+                return 0
             return 1
         if args.max_clips:
             kills = kills[: args.max_clips]
@@ -240,6 +247,9 @@ def main() -> int:
 
         out = build(args.video, kills, args.out_dir / f"{args.video.stem}-kill-highlights.mp4",
                     args.music, args.pre, args.post, workdir)
+        if args.json:
+            print(json.dumps({"kills": [k.start for k in kills], "output": str(out)}))
+            return 0
         print(out)
         if args.music is None:
             print("game audio kept -- add a trending sound in TikTok for reach and licensing",

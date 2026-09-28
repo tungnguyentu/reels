@@ -1,10 +1,12 @@
 """V2 -- the local HTTP API behind the review UI."""
 import shutil
+import subprocess
 import time
 
 import pytest
 from fastapi.testclient import TestClient
 
+from reels import api as api_mod
 from reels import index as index_mod
 from reels import judge as judge_mod
 from reels.api import Settings, create_app
@@ -246,3 +248,32 @@ def test_the_ui_judges_a_batch_in_one_backend_call(client, monkeypatch):
     out = wait(c, job)["result"]
     assert calls == [2], "two ranges must reach the backend as one batch"
     assert [r["accepted"] for r in out] == [True, True]
+
+
+def test_finding_no_kills_is_a_result_not_a_failed_job(client):
+    """The fixture is forest footage: no killfeed. That is an answer, not an error."""
+    c, video = client
+    job = c.post("/api/kills", json={"video": video.name}).json()["job"]
+    done = wait(c, job, timeout=300.0)
+    assert done["status"] == "done", done.get("error")
+    assert done["result"] == {"kills": [], "clip": None}
+
+
+def test_a_broken_detector_run_becomes_a_failed_job_with_its_reason(client, monkeypatch):
+    c, video = client
+
+    def boom(cmd, **kw):
+        return subprocess.CompletedProcess(cmd, 1, "", "ffmpeg: no such filter\n")
+
+    monkeypatch.setattr(api_mod.subprocess, "run", boom)
+    job = c.post("/api/kills", json={"video": video.name}).json()["job"]
+    done = wait(c, job)
+    assert done["status"] == "failed"
+    assert "no such filter" in done["error"]
+
+
+def test_kill_detection_stays_inside_the_configured_roots(client):
+    c, video = client
+    assert c.post("/api/kills", json={"video": "../../etc/passwd"}).status_code == 400
+    assert c.post("/api/kills",
+                  json={"video": video.name, "music": "../../etc/passwd"}).status_code == 400

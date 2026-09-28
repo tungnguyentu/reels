@@ -4,6 +4,7 @@ import type { Candidate, Clip, Config, Treatment, Verdict, Video } from "./api";
 import { CandidateCard } from "./components/CandidateCard";
 import { ClipList } from "./components/ClipList";
 import { VariantPanel } from "./components/VariantPanel";
+import { PackagePanel } from "./components/PackagePanel";
 
 const rangeKey = (c: { start: number; end: number }) => `${c.start.toFixed(2)}-${c.end.toFixed(2)}`;
 
@@ -19,10 +20,12 @@ export default function App() {
   const [verdicts, setVerdicts] = useState<Record<string, Verdict>>({});
   const [selected, setSelected] = useState<Candidate | null>(null);
   const [treatments, setTreatments] = useState<Treatment[]>([]);
+  const [packagingClip, setPackagingClip] = useState<Clip | null>(null);
 
   const [status, setStatus] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<"" | "index" | "search" | "judge" | "render">("");
+  const [busy, setBusy] = useState<"" | "index" | "search" | "judge" | "render" | "package" | "kills">("");
+  const [killTrack, setKillTrack] = useState<string>("");
 
   const refresh = useCallback(async () => {
     const [lib, trk, cl] = await Promise.all([api.getLibrary(), api.getTracks(), api.getClips()]);
@@ -61,6 +64,27 @@ export default function App() {
       await refresh();
     });
 
+  // Kills are not a CLIP search: the killfeed is smaller than CLIP's input and every
+  // frame of a shooter looks like shooting. This runs the pixel detector instead, and
+  // produces one compilation rather than a shortlist to pick from.
+  const doKills = () =>
+    run("kills", async () => {
+      if (!video) return;
+      const { job } = await api.startKills(video, killTrack || null);
+      setStatus("scanning every frame for kill banners — a minute or so on a long match");
+      const done = await api.awaitJob<api.KillsResult>(job);
+      if (done.status === "failed") throw new Error(done.error!);
+      const found = done.result?.kills.length ?? 0;
+      if (!found) {
+        throw new Error(
+          "no kill banners found. The defaults target 1920x1080 Warzone; another game " +
+            "or HUD scale needs a different banner region.",
+        );
+      }
+      setStatus(`${found} kills — ${done.result!.clip}`);
+      await refresh();
+    });
+
   const doSearch = () =>
     run("search", async () => {
       if (!video || !query.trim()) return;
@@ -86,6 +110,35 @@ export default function App() {
       if (done.status === "failed") throw new Error(done.error!);
       setVerdicts(Object.fromEntries((done.result ?? []).map((v) => [rangeKey(v), v])));
     });
+
+  const doPackageTitles = async (steer: string) => {
+    const { job } = await api.startPackageTitles(packagingClip!.name, steer);
+    const done = await api.awaitJob<api.PackageTitle[]>(job);
+    if (done.status === "failed") throw new Error(done.error!);
+    return done.result ?? [];
+  };
+
+  const doPackageDescription = async (title: string) => {
+    const { job } = await api.startPackageDescription(packagingClip!.name, title);
+    const done = await api.awaitJob<string>(job);
+    if (done.status === "failed") throw new Error(done.error!);
+    return done.result ?? "";
+  };
+
+  const doPackageCovers = async (text: string) => {
+    const { job } = await api.startPackageCovers(packagingClip!.name, text);
+    const done = await api.awaitJob<string[]>(job);
+    if (done.status === "failed") throw new Error(done.error!);
+    return done.result ?? [];
+  };
+
+  const doPackageExport = async (title: string, description: string, cover: string | null, titles: api.PackageTitle[], covers: string[]) => {
+    const { job } = await api.startPackageExport(packagingClip!.name, title, description, cover, titles, covers);
+    const done = await api.awaitJob<string>(job);
+    if (done.status === "failed") throw new Error(done.error!);
+    setStatus(`exported ${done.result}`);
+    await refresh();
+  };
 
   const doRender = () =>
     run("render", async () => {
@@ -167,12 +220,44 @@ export default function App() {
             type="button"
             onClick={doJudge}
             disabled={busy !== "" || !config?.judge_available}
-            title={config?.judge_available ? "" : "GEMINI_API_KEY is not set"}
+            title={
+              config?.judge_available
+                ? `judged by ${config.judge_backend}`
+                : "no judge available — set GEMINI_API_KEY, or sign in to agy"
+            }
             className="rounded border border-neutral-700 px-3 py-1.5 text-sm text-neutral-300 hover:bg-neutral-800 disabled:opacity-40"
           >
             ask the model
           </button>
         )}
+
+        <div className="flex items-center gap-1 border-l border-neutral-800 pl-3">
+          <select
+            value={killTrack}
+            onChange={(e) => setKillTrack(e.target.value)}
+            title="music for the kill reel; game audio is kept when nothing is chosen"
+            className="max-w-36 rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm"
+          >
+            <option value="">game audio</option>
+            {tracks.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={doKills}
+            disabled={!video || busy !== ""}
+            title={
+              "Detects the kill banner the game draws, frame by frame — no index and no " +
+              "query needed. Builds one compilation of every kill."
+            }
+            className="rounded border border-amber-700/60 px-3 py-1.5 text-sm text-amber-300 hover:bg-amber-500/10 disabled:opacity-40"
+          >
+            {busy === "kills" ? "scanning…" : "kill reel"}
+          </button>
+        </div>
       </header>
 
       {(status || error) && (
@@ -221,11 +306,23 @@ export default function App() {
 
           <section className="border-t border-neutral-800">
             <h2 className="px-4 pt-4 text-sm font-medium text-neutral-300">rendered</h2>
-            <ClipList clips={clips} />
+            <ClipList clips={clips} onPackage={setPackagingClip} />
           </section>
         </main>
 
-        {selected && video && (
+        {packagingClip && (
+          <PackagePanel
+            clip={packagingClip}
+            judgeAvailable={config?.judge_available ?? false}
+            busy={busy === "package"}
+            onTitles={(steer) => new Promise((resolve, reject) => run("package", () => doPackageTitles(steer).then(resolve).catch(reject)))}
+            onDescription={(title) => new Promise((resolve, reject) => run("package", () => doPackageDescription(title).then(resolve).catch(reject)))}
+            onCovers={(text) => new Promise((resolve, reject) => run("package", () => doPackageCovers(text).then(resolve).catch(reject)))}
+            onExport={(title, description, cover, titles, covers) => run("package", () => doPackageExport(title, description, cover, titles, covers))}
+          />
+        )}
+
+        {selected && video && !packagingClip && (
           <VariantPanel
             video={video}
             candidate={selected}

@@ -34,10 +34,12 @@ export type Config = {
   music_dir: string;
   out_dir: string;
   judge_available: boolean;
+  judge_backend: string;
   reframe_modes: string[];
   defaults: { min_seconds: number; max_seconds: number; shortlist: number; floor: number };
 };
-export type Clip = { name: string; size: number; mtime: number };
+export type Clip = { name: string; size: number; mtime: number; query: string | null };
+export type PackageTitle = { title: string; cover_text: string; reason: string; frame_index: number };
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -61,6 +63,11 @@ export const getClips = () => call<Clip[]>("/api/clips");
 
 export const startIndex = (video: string) =>
   post<{ job: string }>("/api/index", { video });
+
+export type KillsResult = { kills: number[]; clip: string | null };
+
+export const startKills = (video: string, music: string | null) =>
+  post<{ job: string }>("/api/kills", { video, music });
 
 export const search = (body: {
   video: string;
@@ -95,6 +102,16 @@ export const thumbUrl = (video: string, t: number) =>
   `/api/thumb?video=${encodeURIComponent(video)}&t=${t.toFixed(2)}`;
 
 export const clipUrl = (name: string) => `/media/clip?name=${encodeURIComponent(name)}`;
+export const packageUrl = (name: string) => `/media/package?name=${encodeURIComponent(name)}`;
+
+export const startPackageTitles = (clip: string, steer = "") =>
+  post<{ job: string }>("/api/package/titles", { clip, steer });
+export const startPackageDescription = (clip: string, title: string) =>
+  post<{ job: string }>("/api/package/description", { clip, title });
+export const startPackageCovers = (clip: string, cover_text: string, count = 3) =>
+  post<{ job: string }>("/api/package/covers", { clip, cover_text, count });
+export const startPackageExport = (clip: string, title: string, description: string, cover: string | null, titles: PackageTitle[], covers: string[]) =>
+  post<{ job: string }>("/api/package/export", { clip, title, description, cover, titles, covers });
 
 export const previewUrl = (video: string, start: number, end: number) =>
   `/media/preview?video=${encodeURIComponent(video)}&start=${start.toFixed(2)}&end=${end.toFixed(2)}`;

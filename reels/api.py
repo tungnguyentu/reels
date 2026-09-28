@@ -10,7 +10,9 @@ Binds to loopback and serves files only from within the roots it was configured 
 from __future__ import annotations
 
 import hashlib
+import json
 import subprocess
+import sys
 import tempfile
 import uuid
 from collections.abc import Callable
@@ -106,6 +108,16 @@ class RenderIn(BaseModel):
     query: str
     range: RangeIn
     treatments: list[TreatmentIn] = Field(min_length=1)
+
+
+class KillsIn(BaseModel):
+    video: str
+    music: str | None = None
+    pre: float = Field(default=3.0, gt=0, le=30)
+    post: float = Field(default=1.5, gt=0, le=30)
+    max_clips: int = Field(default=0, ge=0, le=200)
+    min_edges: int = Field(default=150, ge=0)
+    region: str | None = None
 
 
 class IndexIn(BaseModel):
@@ -323,6 +335,44 @@ def create_app(settings: Settings) -> FastAPI:
             return out
 
         return {"job": submit("judge", f"judging {len(body.ranges)} ranges", work).id}
+
+    @app.post("/api/kills")
+    def kills(body: KillsIn) -> dict:
+        """Build a highlight reel from on-screen kill banners.
+
+        Run as a subprocess rather than imported. The detector is pixel matching on a
+        game HUD, shares nothing with the CLIP pipeline, and lives outside the package
+        for that reason; shelling out keeps that boundary instead of pulling it in.
+        """
+        video = resolve(body.video, settings.library)
+        music = resolve(body.music, settings.music_dir) if body.music else None
+        script = Path(__file__).resolve().parent.parent / "scripts" / "kill-highlights.py"
+        if not script.is_file():
+            raise HTTPException(501, f"the kill detector is not installed at {script}")
+
+        def work() -> dict:
+            cmd = [sys.executable, str(script), str(video), "--json",
+                   "-o", str(settings.out_dir),
+                   "--pre", str(body.pre), "--post", str(body.post),
+                   "--min-edges", str(body.min_edges)]
+            if body.max_clips:
+                cmd += ["--max-clips", str(body.max_clips)]
+            if body.region:
+                cmd += ["--region", body.region]
+            if music:
+                cmd += ["--music", str(music)]
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            if proc.returncode != 0:
+                detail = (proc.stderr or proc.stdout).strip().splitlines()
+                raise ReelsError(f"kill detection failed: {detail[-1] if detail else proc.returncode}")
+            try:
+                out = json.loads(proc.stdout.strip().splitlines()[-1])
+            except (IndexError, json.JSONDecodeError) as exc:
+                raise ReelsError(f"the kill detector returned unreadable output: {exc}") from exc
+            clip = Path(out["output"]).name if out.get("output") else None
+            return {"kills": out.get("kills", []), "clip": clip}
+
+        return {"job": submit("kills", f"scanning {video.name} for kill banners", work).id}
 
     @app.post("/api/render")
     def start_render(body: RenderIn) -> dict:
