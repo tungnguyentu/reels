@@ -177,6 +177,12 @@ real failure was observed, so check the test before deleting a guard that looks 
   is flat because every frame is shooting. Measured on one 314s match: the detector found
   all 17 kills spread across the whole recording, while `reels clip --all` returned tiles
   covering 4–154s, because a flat curve puts everything over the threshold.
+- `--best N` on the kill script keeps the N most appealing kills, then replays them in
+  **chronological** order. Two orderings on purpose: the model picks which survive, the
+  clock picks the running order — a reel cut in descending appeal reads as a list rather
+  than a match. It imports `reels` lazily, inside the ranking function only, so plain
+  detection still runs without the package. Measured on a 17-kill match the scores
+  spanned only 5–7 of 10, so the ranking separates the top few and little else.
 - **`/api/kills` shells out to that script, and must keep shelling out.** Importing it
   would pull HUD pixel matching into the package it was separated from. It is exposed as
   its own UI action rather than as a search backend for the same reason: a query cannot

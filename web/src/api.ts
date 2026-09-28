@@ -68,8 +68,8 @@ export const startIndex = (video: string) =>
 
 export type KillsResult = { kills: number[]; clip: string | null };
 
-export const startKills = (video: string, music: string | null) =>
-  post<{ job: string }>("/api/kills", { video, music });
+export const startKills = (video: string, music: string | null, best: number) =>
+  post<{ job: string }>("/api/kills", { video, music, best });
 
 export const search = (body: {
   video: string;

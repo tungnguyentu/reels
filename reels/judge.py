@@ -199,7 +199,11 @@ def _to_verdict(payload: object) -> Verdict:
         raise ReelsError(f"the vision model returned an incomplete verdict: {payload!r}")
     reason = str(payload.get("reason", "")).strip() or "no reason given"
     if not payload["accepted"]:
-        return Verdict(False, reason)
+        # Appeal is read on this branch too. It ranks rather than gates, so dropping it
+        # here would sink every rejected span to the bottom of any appeal ordering --
+        # accept/reject deciding the ranking through the back door.
+        appeal, hook = _appeal(payload)
+        return Verdict(False, reason, None, None, appeal, hook)
 
     focal_x, reframe = payload.get("focal_x"), payload.get("reframe")
     if reframe not in (CROP, PILLARBOX):

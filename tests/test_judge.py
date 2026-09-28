@@ -213,3 +213,15 @@ def test_a_non_numeric_appeal_is_dropped_not_fatal(fixture_video):
                    "appeal": "very high", "hook": "x"}),
     )
     assert verdict.accepted and verdict.appeal is None
+
+
+def test_a_rejected_span_still_carries_its_appeal(fixture_video):
+    """Otherwise accept/reject decides the ranking through the back door: every rejected
+    span would sink to the bottom of an appeal ordering regardless of its score."""
+    verdict = judge_mod.judge(
+        fixture_video, Candidate(10.0, 26.0, 0.3), "forest",
+        ask=asker({"accepted": False, "reason": "a banner covers the frame",
+                   "appeal": 7, "hook": "the shot behind it is good"}),
+    )
+    assert verdict.accepted is False
+    assert verdict.appeal == 7 and verdict.hook == "the shot behind it is good"

@@ -110,6 +110,52 @@ def detect(video: Path, region: tuple[float, float, float, float], fps: float,
     return [k for k in kills if k.end - k.start >= MIN_EVENT]
 
 
+def rank_by_appeal(video: Path, kills: list[Kill], pre: float, post: float,
+                   keep: int) -> list[Kill]:
+    """The `keep` most appealing kills, still in the order they happened.
+
+    Two orderings, on purpose: the vision model picks WHICH kills survive, and the clock
+    decides what order they play in. A reel cut in descending appeal reads as a list
+    rather than a match.
+
+    `reels` is imported here rather than at the top: detection is pure pixel work and has
+    to keep running without the package, which is the whole reason this file sits outside
+    it. Only ranking needs a model.
+    """
+    from reels import ReelsError
+    from reels.judge import judge_all
+    from reels.search import Candidate
+
+    spans = [Candidate(max(0.0, k.start - pre), k.start + post, 1.0) for k in kills]
+    outcomes = judge_all(video, spans, "the moment an enemy is killed")
+
+    scored: list[tuple[int, Kill]] = []
+    unscored: list[Kill] = []
+    failures: list[str] = []
+    for kill, outcome in zip(kills, outcomes):
+        if isinstance(outcome, ReelsError):
+            failures.append(str(outcome))
+            unscored.append(kill)
+        elif outcome.appeal is None:
+            unscored.append(kill)
+        else:
+            scored.append((outcome.appeal, kill))
+            print(f"  {kill.start:7.2f}s  appeal {outcome.appeal:2d}/10"
+                  f"{'  ' + outcome.hook if outcome.hook else ''}", file=sys.stderr)
+
+    if not scored:
+        # Silently falling back to the first N would answer a different question than
+        # the one asked, and look identical in the output.
+        sys.exit("no kill was scored, so there is no best N to keep"
+                 + (f": {failures[0]}" if failures else ""))
+    if unscored:
+        print(f"{len(unscored)} kills went unscored and were not considered", file=sys.stderr)
+
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    best = [kill for _, kill in scored[:keep]]
+    return sorted(best, key=lambda k: k.start)
+
+
 def contact_sheet(video: Path, kills: list[Kill], region, dest: Path, workdir: Path) -> Path:
     """One tile per detection, so a human can reject bad ones before any encoding."""
     w, h, _ = probe(video)
@@ -196,6 +242,9 @@ def main() -> int:
     p.add_argument("--post", type=float, default=POST_ROLL)
     p.add_argument("--max-clips", type=int, default=0,
                    help="keep only the first N kills (0 = all)")
+    p.add_argument("--best", type=int, default=0, metavar="N",
+                   help="keep the N most appealing kills instead of the first N, scored "
+                        "by the vision model. Costs one judge pass over every detection.")
     p.add_argument("--fps", type=float, default=SAMPLE_FPS)
     p.add_argument("--min-edges", type=int, default=MIN_EDGES)
     p.add_argument("--max-fraction", type=float, default=MAX_RED_FRACTION)
@@ -233,8 +282,12 @@ def main() -> int:
                 print(json.dumps({"kills": [], "output": None}))
                 return 0
             return 1
+        if args.best and args.max_clips:
+            sys.exit("--best and --max-clips both choose which kills survive; pick one")
         if args.max_clips:
             kills = kills[: args.max_clips]
+        if args.best:
+            kills = rank_by_appeal(args.video, kills, args.pre, args.post, args.best)
 
         args.out_dir.mkdir(parents=True, exist_ok=True)
         if args.check:

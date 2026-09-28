@@ -26,6 +26,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<"" | "index" | "search" | "judge" | "render" | "package" | "kills">("");
   const [killTrack, setKillTrack] = useState<string>("");
+  const [killBest, setKillBest] = useState<number>(0);
 
   const refresh = useCallback(async () => {
     const [lib, trk, cl] = await Promise.all([api.getLibrary(), api.getTracks(), api.getClips()]);
@@ -70,8 +71,12 @@ export default function App() {
   const doKills = () =>
     run("kills", async () => {
       if (!video) return;
-      const { job } = await api.startKills(video, killTrack || null);
-      setStatus("scanning every frame for kill banners — a minute or so on a long match");
+      const { job } = await api.startKills(video, killTrack || null, killBest);
+      setStatus(
+        killBest
+          ? `scanning for kill banners, then scoring each to keep the best ${killBest}`
+          : "scanning every frame for kill banners — a minute or so on a long match",
+      );
       const done = await api.awaitJob<api.KillsResult>(job);
       if (done.status === "failed") throw new Error(done.error!);
       const found = done.result?.kills.length ?? 0;
@@ -81,7 +86,11 @@ export default function App() {
             "or HUD scale needs a different banner region.",
         );
       }
-      setStatus(`${found} kills — ${done.result!.clip}`);
+      setStatus(
+        killBest
+          ? `${found} kills found, best ${Math.min(killBest, found)} kept — ${done.result!.clip}`
+          : `${found} kills — ${done.result!.clip}`,
+      );
       await refresh();
     });
 
@@ -253,6 +262,19 @@ export default function App() {
             {tracks.map((t) => (
               <option key={t} value={t}>
                 {t}
+              </option>
+            ))}
+          </select>
+          <select
+            value={killBest}
+            onChange={(e) => setKillBest(Number(e.target.value))}
+            title="keep only the most appealing kills, scored by the model, still in the order they happened"
+            className="rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm"
+          >
+            <option value={0}>every kill</option>
+            {[3, 5, 8, 10].map((n) => (
+              <option key={n} value={n}>
+                best {n}
               </option>
             ))}
           </select>

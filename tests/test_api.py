@@ -277,3 +277,20 @@ def test_kill_detection_stays_inside_the_configured_roots(client):
     assert c.post("/api/kills", json={"video": "../../etc/passwd"}).status_code == 400
     assert c.post("/api/kills",
                   json={"video": video.name, "music": "../../etc/passwd"}).status_code == 400
+
+
+def test_best_n_reaches_the_detector_and_excludes_max_clips(client, monkeypatch):
+    """--best and --max-clips both choose survivors; the API must not send both."""
+    c, video = client
+    seen = {}
+
+    def spy(cmd, **kw):
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, '{"kills": [], "output": null}\n', "")
+
+    monkeypatch.setattr(api_mod.subprocess, "run", spy)
+    job = c.post("/api/kills", json={"video": video.name, "best": 5, "max_clips": 9}
+                 ).json()["job"]
+    assert wait(c, job)["status"] == "done"
+    assert "--best" in seen["cmd"] and "5" in seen["cmd"]
+    assert "--max-clips" not in seen["cmd"]

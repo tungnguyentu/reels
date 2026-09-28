@@ -116,6 +116,7 @@ class KillsIn(BaseModel):
     pre: float = Field(default=3.0, gt=0, le=30)
     post: float = Field(default=1.5, gt=0, le=30)
     max_clips: int = Field(default=0, ge=0, le=200)
+    best: int = Field(default=0, ge=0, le=200)
     min_edges: int = Field(default=150, ge=0)
     region: str | None = None
 
@@ -357,7 +358,9 @@ def create_app(settings: Settings) -> FastAPI:
                    "-o", str(settings.out_dir),
                    "--pre", str(body.pre), "--post", str(body.post),
                    "--min-edges", str(body.min_edges)]
-            if body.max_clips:
+            if body.best:
+                cmd += ["--best", str(body.best)]
+            elif body.max_clips:
                 cmd += ["--max-clips", str(body.max_clips)]
             if body.region:
                 cmd += ["--region", body.region]

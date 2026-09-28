@@ -124,7 +124,11 @@ def _to_verdict(row: object) -> Verdict:
         raise ReelsError(f"{BINARY} returned an incomplete verdict: {row!r}")
     reason = str(row.get("reason", "")).strip() or "no reason given"
     if not row["accepted"]:
-        return Verdict(False, reason)
+        # Appeal is read on this branch too. It ranks rather than gates, so dropping it
+        # here would sink every rejected span to the bottom of any appeal ordering --
+        # accept/reject deciding the ranking through the back door.
+        appeal, hook = _appeal(row)
+        return Verdict(False, reason, None, None, appeal, hook)
     focal_x, reframe = row.get("focal_x"), row.get("reframe")
     if reframe not in (CROP, PILLARBOX):
         reframe = CROP if isinstance(focal_x, (int, float)) else PILLARBOX
