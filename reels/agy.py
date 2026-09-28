@@ -25,9 +25,26 @@ from .search import Candidate
 
 BINARY = os.environ.get("REELS_AGY_BIN", "agy")
 MODEL_ENV = "REELS_AGY_MODEL"
+TIMEOUT_ENV = "REELS_AGY_TIMEOUT"
 DEFAULT_MODEL = "gemini-3.8-flash-low"
 BATCH_RANGES = 8  # ranges per call; keeps one call's image count and wall time sane
-TIMEOUT_SECONDS = 900
+# agy prints nothing while it works, so a stalled provider looks identical to a slow one.
+# A measured batch of four spans answers in 35-60s; the default leaves generous headroom,
+# and REELS_AGY_TIMEOUT shortens it when you would rather fail fast than wait.
+DEFAULT_TIMEOUT_SECONDS = 900
+
+
+def timeout_seconds() -> float:
+    raw = os.environ.get(TIMEOUT_ENV, "").strip()
+    if not raw:
+        return DEFAULT_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ReelsError(f"{TIMEOUT_ENV} must be a number of seconds, not {raw!r}") from None
+    if value <= 0:
+        raise ReelsError(f"{TIMEOUT_ENV} must be greater than zero, not {value:g}")
+    return value
 
 SCHEMA = {
     "type": "object",
@@ -71,13 +88,18 @@ def _run(workdir: Path, prompt: str, schema_path: Path) -> dict:
         "--output-format", "json",
         "--print", prompt,
     ]
+    limit = timeout_seconds()
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=TIMEOUT_SECONDS, check=False, cwd=workdir)
+                              timeout=limit, check=False, cwd=workdir)
     except FileNotFoundError as exc:
         raise ReelsError(f"{BINARY} is not on PATH: {exc}") from exc
     except subprocess.TimeoutExpired as exc:
-        raise ReelsError(f"{BINARY} did not answer within {TIMEOUT_SECONDS}s") from exc
+        raise ReelsError(
+            f"{BINARY} did not answer within {limit:g}s -- it prints nothing while working, "
+            f"so this is usually the provider stalling rather than the batch being too big; "
+            f"retrying often succeeds. {TIMEOUT_ENV} sets the limit."
+        ) from exc
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout).strip().splitlines()
         raise ReelsError(f"{BINARY} failed: {detail[-1] if detail else proc.returncode}")

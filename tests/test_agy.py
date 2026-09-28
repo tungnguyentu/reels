@@ -126,3 +126,50 @@ def test_no_candidates_makes_no_call(fixture_video, monkeypatch):
     monkeypatch.setattr(subprocess, "run", run)
     assert agy.judge_ranges(fixture_video, [], "forest") == []
     assert not run.calls
+
+
+def test_the_timeout_is_configurable(fixture_video, monkeypatch):
+    """A stalled provider is indistinguishable from a slow one, so the wait is tunable."""
+    monkeypatch.setenv(agy.TIMEOUT_ENV, "30")
+    seen = {}
+
+    def run(cmd, **kw):
+        seen.update(kw)
+        return subprocess.CompletedProcess(
+            cmd, 0, json.dumps({"structured_output": verdicts(
+                {"range": 0, "accepted": False, "reason": "no"})}), "")
+
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw:
+                        run(cmd, **kw) if cmd[0] == agy.BINARY else REAL_RUN(cmd, **kw))
+    agy.judge_ranges(fixture_video, SPANS[:1], "forest")
+    assert seen["timeout"] == 30
+
+
+def test_an_unusable_timeout_is_rejected(monkeypatch):
+    monkeypatch.setenv(agy.TIMEOUT_ENV, "soon")
+    with pytest.raises(ReelsError, match="number of seconds"):
+        agy.timeout_seconds()
+    monkeypatch.setenv(agy.TIMEOUT_ENV, "0")
+    with pytest.raises(ReelsError, match="greater than zero"):
+        agy.timeout_seconds()
+
+
+def test_a_timeout_says_retrying_may_be_enough(fixture_video, monkeypatch):
+    """Observed live: one batch stalled past 900s, the identical call then took 36s."""
+    def run(cmd, **kw):
+        if cmd[0] != agy.BINARY:
+            return REAL_RUN(cmd, **kw)
+        raise subprocess.TimeoutExpired(cmd, kw.get("timeout", 0))
+
+    monkeypatch.setattr(subprocess, "run", run)
+    with pytest.raises(ReelsError, match="retrying"):
+        agy.judge_ranges(fixture_video, SPANS[:1], "forest")
+
+
+def test_the_prompt_names_no_particular_game(fixture_video):
+    """It is shown Call of Duty as readily as Minecraft; naming one misleads the model."""
+    from reels.judge import PROMPT
+
+    filled = PROMPT.format(query="a kill")
+    for word in ("minecraft", "crafting table", "furnace", "block"):
+        assert word not in filled.lower(), f"{word!r} presumes one game"

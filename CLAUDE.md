@@ -33,6 +33,11 @@ CLI, which uses a signed-in Google account instead of a key). Unset, it auto-det
 so the test suite pins it, or the suite would take a different path on a machine that
 happens to have `agy` installed.
 
+`REELS_AGY_MODEL` and `REELS_AGY_TIMEOUT` (seconds) tune the agy backend. agy prints
+nothing while it works, so a stalled provider and a slow one look identical from outside;
+a measured four-span batch answers in 35-60s, and one observed stall ran past 900s while
+the identical call retried immediately took 36s. Shorten the timeout to fail fast.
+
 `REELS_JUDGE_MODEL` overrides the vision model. The default is the `gemini-flash-latest`
 alias rather than a pinned id, because a pinned version goes stale silently.
 
@@ -60,6 +65,12 @@ guard, both reading stream `v:0`. The image2 muxer carries no timestamps into th
 JPEGs, which is why the timestamp pass exists at all. Timestamps have the stream's
 `start_time` subtracted, because `ffmpeg -ss` counts from there rather than from absolute
 PTS.
+
+**The judge prompt names no particular game.** It is shown Call of Duty as readily as
+Minecraft, and naming one tells the model something false about the other -- during a live
+run agy identified the footage as Warzone unprompted while the prompt insisted it was
+Minecraft. The reject rules stay generic for the same reason: "a storage or crafting
+screen", not "a chest or furnace".
 
 **The division of labour between CLIP and the vision model is the central design fact.**
 CLIP owns the score curve and therefore the clip boundaries; the vision model owns only

@@ -40,15 +40,16 @@ DEFAULT_FOCAL_X = 0.5  # the only place this default lives
 
 Asker = Callable[[Sequence[bytes], str], dict]
 
-PROMPT = """These frames are sampled from one continuous span of Minecraft gameplay footage.
+PROMPT = """These frames are sampled from one continuous span of gameplay footage.
 The creator is looking for: "{query}"
 
 Judge whether this span is usable as a vertical short-form video clip.
 
 Reject it if any of these hold:
-- A game UI overlay covers the frame: inventory, chest, crafting table, furnace, pause
-  menu, map, or advancement screen. Reject on this regardless of what the background shows.
-- The shot is a near-field close-up. The camera is pressed against a wall, a block, or
+- A full-screen UI overlay covers the frame: an inventory, crafting or storage screen, a
+  pause menu, map, scoreboard, shop, killcam, or a level-up or match-summary banner.
+  Reject on this regardless of what the background shows.
+- The shot is a near-field close-up. The camera is pressed against a wall, a surface, or
   foliage, with no sense of distance and no horizon.
 - The camera motion is erratic: spinning, jerking, or whipping around.
 
