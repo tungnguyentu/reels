@@ -107,3 +107,51 @@ def test_only_the_default_is_scaled(kh):
     src = inspect.getsource(kh.detect)
     assert "if min_edges is None" in src, "an explicit value must bypass scaling"
     assert "scaled_edges(MIN_EDGES, h)" in src, "the default is what gets scaled"
+
+
+def spans_of(total, n=4):
+    each = total / n
+    return [(i * each * 2, i * each * 2 + each) for i in range(n)]
+
+
+def test_target_picks_the_factor_that_fits(kh):
+    assert kh.speed_for(spans_of(204.0), target=90.0, speed=1.0) == pytest.approx(204 / 90)
+
+
+def test_a_target_never_slows_footage_down_to_pad_it(kh):
+    """A target is a ceiling on length. Stretching a short reel to reach it is not what
+    was asked, and would make every kill drag."""
+    assert kh.speed_for(spans_of(40.0), target=90.0, speed=1.0) == 1.0
+
+
+def test_an_explicit_speed_is_used_when_no_target_is_given(kh):
+    assert kh.speed_for(spans_of(204.0), target=None, speed=1.5) == 1.5
+
+
+def test_a_useless_target_falls_back_rather_than_dividing_by_zero(kh):
+    assert kh.speed_for(spans_of(204.0), target=0.0, speed=1.0) == 1.0
+    assert kh.speed_for([], target=90.0, speed=1.0) == 1.0
+
+
+def test_atempo_is_chained_past_what_one_stage_accepts(kh):
+    """atempo errors out above 2.0 rather than clamping, so a big factor must be stages."""
+    chain = kh.atempo_chain(2.2769)
+    assert chain.count("atempo=") == 2
+    product = 1.0
+    for stage in chain.split(","):
+        product *= float(stage.split("=")[1])
+    assert product == pytest.approx(2.2769, rel=1e-4)
+
+
+def test_every_atempo_stage_is_one_ffmpeg_accepts(kh):
+    for speed in (1.0, 1.9, 2.0, 2.27, 4.0, 7.5, 0.6):
+        for stage in kh.atempo_chain(speed).split(","):
+            assert 0.5 <= float(stage.split("=")[1]) <= 2.0, (speed, stage)
+
+
+def test_a_chain_multiplies_back_to_the_factor_asked_for(kh):
+    for speed in (1.0, 1.5, 2.27, 4.0, 9.0):
+        product = 1.0
+        for stage in kh.atempo_chain(speed).split(","):
+            product *= float(stage.split("=")[1])
+        assert product == pytest.approx(speed, rel=1e-4)
