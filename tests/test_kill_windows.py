@@ -155,3 +155,27 @@ def test_a_chain_multiplies_back_to_the_factor_asked_for(kh):
         for stage in kh.atempo_chain(speed).split(","):
             product *= float(stage.split("=")[1])
         assert product == pytest.approx(speed, rel=1e-4)
+
+
+def test_skip_drops_only_what_was_named(kh):
+    ks = kills(kh, 10.0, 20.0, 30.0)
+    kept = kh.drop_near(ks, [20.0])
+    assert [k.start for k in kept] == [10.0, 30.0]
+
+
+def test_skip_tolerates_a_timestamp_read_off_a_contact_sheet(kh):
+    """The times come from a tile label rounded to 0.1s, not from the detector."""
+    ks = kills(kh, 110.75)
+    assert kh.drop_near(ks, [110.5]) == []
+
+
+def test_skip_does_not_reach_a_neighbouring_kill(kh):
+    """Kills 2.5s apart are common in a streak; skipping one must not take the next."""
+    ks = kills(kh, 100.0, 102.5)
+    kept = kh.drop_near(ks, [100.0])
+    assert [k.start for k in kept] == [102.5]
+
+
+def test_no_skip_list_changes_nothing(kh):
+    ks = kills(kh, 10.0, 20.0)
+    assert kh.drop_near(ks, []) == ks

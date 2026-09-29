@@ -191,6 +191,18 @@ def rank_by_appeal(video: Path, kills: list[Kill], pre: float, post: float,
     return sorted(best, key=lambda k: k.start)
 
 
+def drop_near(kills: list[Kill], times: list[float], tolerance: float = 1.5) -> list[Kill]:
+    """Kills whose banner does not sit within `tolerance` of any time in `times`.
+
+    Detection is pixels, and an inventory screen or a "Deploy Wingsuit" prompt in the same
+    zone reads much like a banner -- measured on one match, the duration and red profile of
+    the two are indistinguishable, so no threshold separates them. Naming the handful by
+    timestamp after looking at --check is honest about that, and cheaper than a detector
+    that pretends to know the difference.
+    """
+    return [k for k in kills if all(abs(k.start - t) > tolerance for t in times)]
+
+
 def atempo_chain(speed: float) -> str:
     """An audio filter chain for `speed`, in stages atempo actually accepts.
 
@@ -356,6 +368,11 @@ def main() -> int:
     p.add_argument("--target", type=float, default=None, metavar="SECONDS",
                    help="speed the reel up to fit this length, keeping every kill. "
                         "A ceiling, not a goal: footage already shorter is left alone.")
+    p.add_argument("--skip", type=lambda v: [float(x) for x in v.split(",") if x.strip()],
+                   default=None, metavar="T1,T2",
+                   help="drop detections near these times (seconds), for the inventory and "
+                        "prompt screens --check shows. No threshold separates those from a "
+                        "real banner, so they are named rather than guessed at.")
     p.add_argument("--speed", type=float, default=1.0,
                    help="playback factor, e.g. 1.5. Ignored when --target is given.")
     p.add_argument("--max-clips", type=int, default=0,
@@ -403,6 +420,11 @@ def main() -> int:
                 print(json.dumps({"kills": [], "output": None}))
                 return 0
             return 1
+        if args.skip:
+            before = len(kills)
+            kills = drop_near(kills, args.skip)
+            print(f"dropped {before - len(kills)} of {before} detections by --skip",
+                  file=sys.stderr)
         if args.best and args.max_clips:
             sys.exit("--best and --max-clips both choose which kills survive; pick one")
         if args.max_clips:
