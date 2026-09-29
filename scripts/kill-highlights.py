@@ -37,6 +37,7 @@ REGION = (880 / 1920, 893 / 1080, 150 / 1920, 34 / 1080)
 
 SAMPLE_FPS = 4.0  # a banner shows for ~2s; 4fps cannot miss one and costs ~20s per 5min
 MIN_EDGES = 150  # text is all edges. A flash is a slab: edges ~0.
+REFERENCE_HEIGHT = 1080  # MIN_EDGES was measured on a 1080p capture -- see scaled_edges()
 MAX_RED_FRACTION = 0.60  # above this the zone is a flash, not text
 EVENT_GAP = 2.5  # seconds of quiet that ends one banner
 MIN_EVENT = 0.25
@@ -88,9 +89,33 @@ class Kill:
     end: float
 
 
+def scaled_edges(min_edges: int, height: int) -> int:
+    """MIN_EDGES adjusted for a capture that is not 1080p.
+
+    The banner zone is defined as fractions of the frame, so it shrinks with the source
+    while the edge threshold did not: at 720p the zone holds barely half the pixels and a
+    real banner cannot reach a count calibrated on 1080p. Measured on a 720p match, the
+    unscaled default found 8 banners where 30 were present.
+
+    Scaled by the linear ratio rather than by area, because edges run along text strokes:
+    a stroke gets shorter, not thinner, and area would over-correct. This is calibration
+    from one capture, not a law -- a 720p source does better around 90 than the 100 this
+    produces.
+
+    Only the default is scaled. A number the operator passed was measured on their own
+    footage at its own resolution, and scaling it underneath them would mean --min-edges 90
+    quietly became 60.
+    """
+    if height <= 0 or height == REFERENCE_HEIGHT:
+        return min_edges
+    return max(1, round(min_edges * height / REFERENCE_HEIGHT))
+
+
 def detect(video: Path, region: tuple[float, float, float, float], fps: float,
-           min_edges: int, max_fraction: float, workdir: Path) -> list[Kill]:
+           min_edges: int | None, max_fraction: float, workdir: Path) -> list[Kill]:
     w, h, _, _ = probe(video)
+    if min_edges is None:
+        min_edges = scaled_edges(MIN_EDGES, h)
     rx, ry, rw, rh = region
     crop = f"{max(2, round(rw * w))}:{max(2, round(rh * h))}:{round(rx * w)}:{round(ry * h)}"
     frames = workdir / "zone"
@@ -289,7 +314,10 @@ def main() -> int:
                    help="keep the N most appealing kills instead of the first N, scored "
                         "by the vision model. Costs one judge pass over every detection.")
     p.add_argument("--fps", type=float, default=SAMPLE_FPS)
-    p.add_argument("--min-edges", type=int, default=MIN_EDGES)
+    p.add_argument("--min-edges", type=int, default=None,
+                   help="edge count a banner must reach. Left out, the 1080p default of "
+                        f"{MIN_EDGES} is scaled to the source height; a value given here is "
+                        "used as measured. Try lower if kills are missed.")
     p.add_argument("--max-fraction", type=float, default=MAX_RED_FRACTION)
     p.add_argument("--region", type=str, default=None,
                    help="banner zone as x,y,w,h fractions of the frame (see --check)")

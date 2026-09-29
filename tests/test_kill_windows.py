@@ -79,3 +79,31 @@ def test_gap_zero_still_merges_windows_that_actually_overlap(kh):
     apart = kh.windows(kills(kh, 100.0, 110.0), pre=4.0, post=2.0, duration=600.0,
                        merge_gap=0.0)
     assert len(apart) == 2
+
+
+def test_the_edge_threshold_scales_to_a_smaller_capture(kh):
+    """The banner zone is a fraction of the frame, so it shrinks with the source while a
+    fixed threshold does not. Unscaled, a 720p match reported 8 banners out of 30."""
+    assert kh.scaled_edges(150, 1080) == 150
+    assert kh.scaled_edges(150, 720) == 100
+    assert kh.scaled_edges(150, 2160) == 300
+
+
+def test_an_unreadable_height_leaves_the_threshold_alone(kh):
+    assert kh.scaled_edges(150, 0) == 150
+    assert kh.scaled_edges(150, -1) == 150
+
+
+def test_scaling_never_reaches_zero(kh):
+    """A threshold of 0 would mark every frame hot and detect one endless banner."""
+    assert kh.scaled_edges(150, 1) >= 1
+
+
+def test_only_the_default_is_scaled(kh):
+    """A number measured on the operator's own 720p footage must not be scaled again:
+    --min-edges 90 quietly becoming 60 is worse than no scaling at all."""
+    import inspect
+
+    src = inspect.getsource(kh.detect)
+    assert "if min_edges is None" in src, "an explicit value must bypass scaling"
+    assert "scaled_edges(MIN_EDGES, h)" in src, "the default is what gets scaled"
