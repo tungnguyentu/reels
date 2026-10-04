@@ -25,6 +25,9 @@ build-backend = "hatchling.build"
 
 [tool.ruff]
 line-length = 100
+# Vendored third-party code (see .claude/skills/ffmpeg-skill/VENDORED.md). `ruff --fix`
+# rewrote 57 of its files in place once; it is upstream's code and is updated by re-copying.
+extend-exclude = [".claude"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

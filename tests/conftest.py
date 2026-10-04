@@ -44,3 +44,18 @@ def fake_encoder():
         vecs = rng.standard_normal((len(paths), 8)).astype(np.float32)
         return vecs / np.linalg.norm(vecs, axis=1, keepdims=True)
     return encode
+
+
+@pytest.fixture
+def true_peak():
+    """Measured true peak of a file's audio in dBTP, as a platform check would read it."""
+    import subprocess
+
+    def measure(path):
+        err = subprocess.run(
+            ["ffmpeg", "-nostdin", "-hide_banner", "-i", str(path), "-af", "ebur128=peak=true",
+             "-f", "null", "-"], capture_output=True, text=True, check=True,
+        ).stderr
+        return float(err[err.rindex("True peak:"):].split("Peak:")[1].split("dBFS")[0])
+
+    return measure

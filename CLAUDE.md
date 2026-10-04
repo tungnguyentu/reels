@@ -190,6 +190,21 @@ real failure was observed, so check the test before deleting a guard that looks 
   than a match. It imports `reels` lazily, inside the ranking function only, so plain
   detection still runs without the package. Measured on a 17-kill match the scores
   spanned only 5–7 of 10, so the ranking separates the top few and little else.
+- **Audio is levelled, not limited, and `alimiter` is a trap.** `alimiter` auto-levels its
+  output back to 0 dB unless given `level=disabled`, so it is a peak *normaliser*: it dragged
+  ~-16 LUFS music up to ~-14 and pinned its peaks at 0 dBFS, which AAC then pushed past 0.
+  Every reel measured +1.3 to +3.2 dBTP against a platform limit of -1. A fixed ceiling cannot
+  fix it either -- AAC adds 0-1.8 dB of peak of its own, erratically (a 0.7 ceiling ended up
+  hotter than 0.8) -- and switching the auto-level off alone costs 2-3 LU. `render.py` uses a
+  single-pass `loudnorm`; the kill script levels the finished reel with the vendored skill's
+  two-pass `loudness.py` (`--no-normalize` to skip), because 2-6 s segments are too short for a
+  single pass. Verify any audio change with `check.py`, not by ear.
+- **`.claude/skills/ffmpeg-skill/` is vendored third-party code: read it, run it, never edit
+  it.** Product code under `reels/` must not depend on it (the package has to work without
+  `.claude/`); only `scripts/kill-highlights.py` calls it, and degrades loudly if it is
+  missing. `ruff` excludes the directory because `ruff --fix` once rewrote 57 of its files.
+  After producing a deliverable, `python3 .claude/skills/ffmpeg-skill/scripts/check.py FILE
+  --platform tiktok|shorts|reels` is the gate; it is what found the clipping above.
 - **`/api/kills` shells out to that script, and must keep shelling out.** Importing it
   would pull HUD pixel matching into the package it was separated from. It is exposed as
   its own UI action rather than as a search backend for the same reason: a query cannot

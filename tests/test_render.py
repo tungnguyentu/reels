@@ -268,3 +268,24 @@ def test_the_real_fixture_reports_its_own_rate(fixture_video):
     from reels import render as render_mod
 
     assert 1 <= render_mod.output_fps(fixture_video) <= render_mod.MAX_OUTPUT_FPS
+
+
+def test_a_hot_track_does_not_leave_the_clip_over_the_platform_peak_limit(
+    fixture_video, tmp_path, true_peak
+):
+    """TikTok/Shorts want true peak <= -1 dBTP. Every clip built so far measured above it:
+    alimiter auto-levels its output back to 0 dB unless told not to, so it was a peak
+    normaliser, and the AAC encoder then adds up to ~1.8 dB of its own on top. White noise at
+    full scale is the worst case for both, which is why it is the fixture rather than the
+    usual quiet sine."""
+    hot = tmp_path / "music"
+    hot.mkdir()
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "anoisesrc=amplitude=1.0:duration=6",
+         str(hot / "hot.mp3"), "-y"], check=True,
+    )
+    out = rnd.render(
+        fixture_video, Candidate(10.0, 18.0, 0.3), Verdict(True, "v", 0.5, CROP),
+        "forest", music_dir=hot, out_dir=tmp_path / "out",
+    )
+    assert true_peak(out) <= -1.0

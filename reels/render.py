@@ -27,7 +27,20 @@ BLUR_SIGMA = 40
 VIDEO_CRF = "20"
 VIDEO_PRESET = "medium"
 AUDIO_BITRATE = "192k"
-LIMITER_CEILING = 0.9
+# Loudness-normalise the track to what Shorts and Reels expect, with a true-peak ceiling that
+# leaves ~1 dB for the AAC encoder (which adds 0-1.8 dB of peak of its own, measured).
+#
+# This replaced `alimiter=limit=0.9`, which was doing a different job than it looked like.
+# alimiter auto-levels its output back to 0 dB unless told not to, so it was a peak
+# *normaliser*: it dragged ~-16 LUFS music up to ~-14 and pinned its peaks at 0 dBFS, which
+# the AAC encoder then pushed past 0 (every clip measured -0.4 to +0.2 dBTP, platform limit
+# -1). Switching the auto-level off alone drops the loudness 2-3 LU, so the fix is a real
+# loudness stage. Measured on three clips with real music: -15.1/-14.2/-13.8 LUFS at
+# -2.0/-1.9/-2.0 dBTP, against a ceiling-only limiter that could not meet both at any setting.
+# ponytail: single-pass loudnorm is dynamic and lands within ~1 LU, not exactly on target.
+# The exact version is two passes with measured values, as the vendored ffmpeg-skill's
+# loudness.py does -- worth it only if a clip is found outside -14 +/- 2 LUFS.
+AUDIO_LEVELING = "loudnorm=I=-14:TP=-2:LRA=11"
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".flac", ".wav", ".ogg", ".opus", ".aac"}
 
 
@@ -162,10 +175,10 @@ def render(
          "-filter_complex", video_filter(verdict, source_width, source_height),
          "-map", "[v]", "-map", "1:a",
          "-af", (f"afade=t=out:st={fade_start:.3f}:d={FADE_SECONDS},"
-                 f"alimiter=limit={LIMITER_CEILING}"),
+                 f"{AUDIO_LEVELING}"),
          "-t", f"{duration:.3f}",
          "-r", str(output_fps(video)), "-c:v", "libx264", "-crf", VIDEO_CRF, "-preset", VIDEO_PRESET,
-         "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", AUDIO_BITRATE,
+         "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ar", "48000",
          str(destination), "-y",
     ]
     try:

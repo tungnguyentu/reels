@@ -45,11 +45,19 @@ MIN_EVENT = 0.25
 PRE_ROLL = 4.0  # the banner appears AFTER the kill; the shot that earned it is before
 POST_ROLL = 2.0
 MERGE_GAP = 2.0  # windows closer than this become one continuous shot -- see windows()
-MAX_ATEMPO = 2.0  # one atempo stage; a larger factor is a chain -- see atempo_chain()
 OUT_W, OUT_H = 1080, 1920
 MAX_FPS = 60  # keep the source rate up to here; forcing 30 halves a 60fps capture and
 # shows up as judder exactly where a shooter needs it least -- fast camera movement.
 GAME_VOLUME, MUSIC_VOLUME = 0.55, 0.85
+# Game audio is levelled once, over the finished reel, by the vendored ffmpeg-skill's
+# loudness.py: two passes, and it re-encodes lower when the AAC encoder overshoots the
+# ceiling. Measured on three finished reels before this existed: +1.3, +1.4 and +3.2 dBTP
+# against a platform limit of -1, and one at -10 LUFS. A fixed limiter ceiling could not fix
+# that (-0.8 dBTP and 0.8 LU quieter, still failing); per-segment loudnorm is unusable on
+# 2-6 s clips. Targets are the TikTok/Shorts ones, with 0.5 dB under the -1 limit.
+LOUDNESS_TOOL = (Path(__file__).resolve().parent.parent
+                 / ".claude/skills/ffmpeg-skill/scripts/loudness.py")
+TARGET_LUFS, TARGET_TRUE_PEAK = -14.0, -1.5
 
 
 def run(cmd: list[str]) -> str:
@@ -203,39 +211,6 @@ def drop_near(kills: list[Kill], times: list[float], tolerance: float = 1.5) -> 
     return [k for k in kills if all(abs(k.start - t) > tolerance for t in times)]
 
 
-def atempo_chain(speed: float) -> str:
-    """An audio filter chain for `speed`, in stages atempo actually accepts.
-
-    atempo takes 0.5-2.0 per stage on the ffmpeg builds still in wide use, and silently
-    errors out above that rather than clamping. Chained stages multiply, and each one
-    preserves pitch, so 2.27x is 2.0 then 1.135 -- fast, not chipmunked.
-    """
-    stages, remaining = [], speed
-    while remaining > MAX_ATEMPO:
-        stages.append(f"atempo={MAX_ATEMPO}")
-        remaining /= MAX_ATEMPO
-    while remaining < 0.5:
-        stages.append("atempo=0.5")
-        remaining /= 0.5
-    stages.append(f"atempo={remaining:.6f}")
-    return ",".join(stages)
-
-
-def speed_for(spans: list[tuple[float, float]], target: float | None, speed: float) -> float:
-    """The playback factor: an explicit --speed, or what --target needs to fit.
-
-    Derived from the spans rather than from the kill count, because merged streaks make
-    those two different numbers. Never slows footage down to pad a reel out to a target --
-    a target is a ceiling on length, and stretching to reach it is not what was asked.
-    """
-    if target is None:
-        return speed
-    total = sum(end - start for start, end in spans)
-    if total <= 0 or target <= 0:
-        return speed
-    return max(1.0, total / target)
-
-
 def windows(kills: list[Kill], pre: float, post: float, duration: float,
             merge_gap: float = MERGE_GAP) -> list[tuple[float, float]]:
     """(start, end) per clip, with runs of nearby kills merged into one shot.
@@ -265,6 +240,33 @@ def windows(kills: list[Kill], pre: float, post: float, duration: float,
     return spans
 
 
+def normalize(path: Path) -> bool:
+    """Level the reel's audio in place. False, with the reason on stderr, when it could not.
+
+    Never fatal: the reel is already built and usable, so a missing or failing tool leaves
+    it as it was and says so loudly -- silently shipping un-levelled audio is the defect
+    this exists to remove.
+    """
+    if not LOUDNESS_TOOL.is_file():
+        print(f"audio NOT normalised: {LOUDNESS_TOOL} is missing", file=sys.stderr)
+        return False
+    tmp = path.with_name(f"{path.stem}.norm{path.suffix}")
+    proc = subprocess.run(
+        [sys.executable, str(LOUDNESS_TOOL), str(path), "-I", str(TARGET_LUFS),
+         "--tp", str(TARGET_TRUE_PEAK), "-o", str(tmp)],
+        capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout).strip().splitlines()
+        print(f"audio NOT normalised: {tail[-1] if tail else proc.returncode}", file=sys.stderr)
+        tmp.unlink(missing_ok=True)
+        return False
+    tmp.replace(path)
+    result = next((line for line in (proc.stdout + proc.stderr).splitlines()
+                   if line.startswith("result:")), "")
+    print(f"audio normalised {result.removeprefix('result:').strip()}", file=sys.stderr)
+    return True
+
+
 def contact_sheet(video: Path, kills: list[Kill], region, dest: Path, workdir: Path) -> Path:
     """One tile per detection, so a human can reject bad ones before any encoding."""
     w, h, _, _ = probe(video)
@@ -287,8 +289,7 @@ def contact_sheet(video: Path, kills: list[Kill], region, dest: Path, workdir: P
 
 
 def build(video: Path, kills: list[Kill], out: Path, music: Path | None,
-          pre: float, post: float, workdir: Path, merge_gap: float = MERGE_GAP,
-          target: float | None = None, speed: float = 1.0) -> Path:
+          pre: float, post: float, workdir: Path, merge_gap: float = MERGE_GAP) -> Path:
     w, h, duration, fps = probe(video)
     crop_w = min(w, round(h * OUT_W / OUT_H))
     crop_w -= crop_w % 2
@@ -301,22 +302,12 @@ def build(video: Path, kills: list[Kill], out: Path, music: Path | None,
     if len(spans) < len(kills):
         print(f"{len(kills)} kills -> {len(spans)} shots "
               f"({len(kills) - len(spans)} merged into a streak)", file=sys.stderr)
-    factor = speed_for(spans, target, speed)
-    if factor != 1.0:
-        kept = sum(end - start for start, end in spans)
-        print(f"{kept:.1f}s of footage at {factor:.2f}x -> {kept / factor:.1f}s",
-              file=sys.stderr)
-    # Applied here, in the pass that already re-encodes. Speeding the stitched reel up
-    # afterwards would be a second full encode of everything, for no gain.
     vf = f"crop={crop_w}:{h}:{crop_x}:0,scale={OUT_W}:{OUT_H}:flags=lanczos,setsar=1"
-    if factor != 1.0:
-        vf += f",setpts=PTS/{factor:.6f}"
     for i, (start, end) in enumerate(spans, 1):
         length = end - start
         seg = segs / f"s_{i:03d}.mp4"
         run(["ffmpeg", "-nostdin", "-v", "error", "-ss", f"{start:.3f}", "-t", f"{length:.3f}",
              "-i", str(video), "-vf", vf,
-             *(["-af", atempo_chain(factor)] if factor != 1.0 else []),
              "-c:v", "libx264", "-crf", "20", "-preset", "medium", "-pix_fmt", "yuv420p",
              "-r", str(fps), "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
              str(seg), "-y"])
@@ -345,7 +336,7 @@ def build(video: Path, kills: list[Kill], out: Path, music: Path | None,
          "-filter_complex",
          (f"[0:a]volume={GAME_VOLUME}[g];[1:a]volume={MUSIC_VOLUME}[m];"
           f"[g][m]amix=inputs=2:duration=first:dropout_transition=0,"
-          f"afade=t=out:st={fade:.2f}:d=2,alimiter=limit=0.92[a]"),
+          f"afade=t=out:st={fade:.2f}:d=2,alimiter=limit=0.9:level=disabled[a]"),
          "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
          "-t", f"{total:.3f}", str(out), "-y"])
     return out
@@ -365,16 +356,11 @@ def main() -> int:
                    help="kills whose windows sit within this many seconds of each other "
                         "become one continuous shot (default 2.0). 0 still merges "
                         "windows that overlap, since replaying those seconds is worse")
-    p.add_argument("--target", type=float, default=None, metavar="SECONDS",
-                   help="speed the reel up to fit this length, keeping every kill. "
-                        "A ceiling, not a goal: footage already shorter is left alone.")
     p.add_argument("--skip", type=lambda v: [float(x) for x in v.split(",") if x.strip()],
                    default=None, metavar="T1,T2",
                    help="drop detections near these times (seconds), for the inventory and "
                         "prompt screens --check shows. No threshold separates those from a "
                         "real banner, so they are named rather than guessed at.")
-    p.add_argument("--speed", type=float, default=1.0,
-                   help="playback factor, e.g. 1.5. Ignored when --target is given.")
     p.add_argument("--max-clips", type=int, default=0,
                    help="keep only the first N kills (0 = all)")
     p.add_argument("--best", type=int, default=0, metavar="N",
@@ -388,6 +374,9 @@ def main() -> int:
     p.add_argument("--max-fraction", type=float, default=MAX_RED_FRACTION)
     p.add_argument("--region", type=str, default=None,
                    help="banner zone as x,y,w,h fractions of the frame (see --check)")
+    p.add_argument("--normalize", action=argparse.BooleanOptionalAction, default=True,
+                   help="level the audio to -14 LUFS / -1.5 dBTP (default on); "
+                        "--no-normalize keeps the game audio exactly as recorded")
     p.add_argument("--check", action="store_true",
                    help="write a contact sheet of detections and stop, encoding nothing")
     p.add_argument("--json", action="store_true",
@@ -446,8 +435,9 @@ def main() -> int:
         picked = f"-best{args.best}" if args.best else f"-first{args.max_clips}" if args.max_clips else ""
         out = build(args.video, kills,
                     args.out_dir / f"{args.video.stem}-kill-highlights{picked}.mp4",
-                    args.music, args.pre, args.post, workdir, args.merge_gap,
-                    args.target, args.speed)
+                    args.music, args.pre, args.post, workdir, args.merge_gap)
+        if args.normalize:
+            normalize(out)
         if args.json:
             print(json.dumps({"kills": [k.start for k in kills], "output": str(out)}))
             return 0
