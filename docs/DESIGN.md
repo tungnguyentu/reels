@@ -147,3 +147,14 @@ assumption the whole indexing design rests on.
 Two things are deliberately not covered by unit tests, because nothing but a real run can
 settle them: whether the judge's taste is any good, and whether the floor generalises past
 the recording it was calibrated on.
+
+## Packaging
+
+Packaging is a layer above rendering. A rendered clip records its query and source range in
+sidecars. Packaging samples the source recording when that metadata remains valid, because a
+vertical rendered clip can contain blur bars or a narrow crop that does not describe the scene.
+It falls back to the rendered clip when the source is unavailable.
+
+Covers use sampled frames, a vendored Noto Sans font, a dark text scrim, and JPEG output. A
+frame proves the cover depicts the clip. JPEG quality can step down until the file is below
+2 MB. PNG has no equivalent quality control.
