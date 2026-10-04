@@ -289,7 +289,8 @@ def contact_sheet(video: Path, kills: list[Kill], region, dest: Path, workdir: P
 
 
 def build(video: Path, kills: list[Kill], out: Path, music: Path | None,
-          pre: float, post: float, workdir: Path, merge_gap: float = MERGE_GAP) -> Path:
+          pre: float, post: float, workdir: Path, merge_gap: float = MERGE_GAP,
+          layout: str = "blur") -> Path:
     w, h, duration, fps = probe(video)
     crop_w = min(w, round(h * OUT_W / OUT_H))
     crop_w -= crop_w % 2
@@ -302,13 +303,21 @@ def build(video: Path, kills: list[Kill], out: Path, music: Path | None,
     if len(spans) < len(kills):
         print(f"{len(kills)} kills -> {len(spans)} shots "
               f"({len(kills) - len(spans)} merged into a streak)", file=sys.stderr)
-    vf = f"crop={crop_w}:{h}:{crop_x}:0,scale={OUT_W}:{OUT_H}:flags=lanczos,setsar=1"
+    if layout == "blur":
+        # The whole frame at output width -- scaled down, never up -- over a blurred copy of
+        # itself. Cropping a 16:9 frame to 9:16 throws away two thirds of it and upsamples the
+        # rest 1.78x, which is where the softness came from.
+        vf = (f"split[a][b];[a]crop={crop_w}:{h}:{crop_x}:0,scale=135:240,gblur=sigma=6,"
+              f"scale={OUT_W}:{OUT_H},setsar=1[bg];"
+              f"[b]scale={OUT_W}:-2:flags=lanczos[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2")
+    else:
+        vf = f"crop={crop_w}:{h}:{crop_x}:0,scale={OUT_W}:{OUT_H}:flags=lanczos,setsar=1"
     for i, (start, end) in enumerate(spans, 1):
         length = end - start
         seg = segs / f"s_{i:03d}.mp4"
         run(["ffmpeg", "-nostdin", "-v", "error", "-ss", f"{start:.3f}", "-t", f"{length:.3f}",
-             "-i", str(video), "-vf", vf,
-             "-c:v", "libx264", "-crf", "20", "-preset", "medium", "-pix_fmt", "yuv420p",
+             "-i", str(video), "-filter_complex" if layout == "blur" else "-vf", vf,
+             "-c:v", "libx264", "-crf", "17", "-preset", "slow", "-pix_fmt", "yuv420p",
              "-r", str(fps), "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
              str(seg), "-y"])
         made.append(seg)
@@ -366,6 +375,9 @@ def main() -> int:
     p.add_argument("--best", type=int, default=0, metavar="N",
                    help="keep the N most appealing kills instead of the first N, scored "
                         "by the vision model. Costs one judge pass over every detection.")
+    p.add_argument("--layout", choices=("blur", "crop"), default="blur",
+                   help="blur: whole frame over a blurred backdrop, sharper (default); "
+                        "crop: centre 9:16 slice filling the frame, bigger but upscaled 1.78x")
     p.add_argument("--fps", type=float, default=SAMPLE_FPS)
     p.add_argument("--min-edges", type=int, default=None,
                    help="edge count a banner must reach. Left out, the 1080p default of "
@@ -435,7 +447,7 @@ def main() -> int:
         picked = f"-best{args.best}" if args.best else f"-first{args.max_clips}" if args.max_clips else ""
         out = build(args.video, kills,
                     args.out_dir / f"{args.video.stem}-kill-highlights{picked}.mp4",
-                    args.music, args.pre, args.post, workdir, args.merge_gap)
+                    args.music, args.pre, args.post, workdir, args.merge_gap, args.layout)
         if args.normalize:
             normalize(out)
         if args.json:
