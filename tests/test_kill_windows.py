@@ -187,3 +187,15 @@ def test_a_failing_tool_leaves_the_reel_untouched_and_cleans_up(kh, tmp_path, mo
     assert reel.read_bytes() == before
     assert "no such filter" in capsys.readouterr().err
     assert not list(tmp_path.glob("*.norm.*"))
+
+
+def test_shot_fx_labels_a_single_kill_and_a_merged_streak(kh):
+    kills = [kh.Kill(10, 11), kh.Kill(30, 31), kh.Kill(33, 34), kh.Kill(36, 37)]
+    assert "text='KILL 1'" in kh.shot_fx(1, 6, 12, kills, None)
+    assert "text='KILLS 2-4'" in kh.shot_fx(2, 27, 39, kills, None)
+
+
+def test_shot_fx_title_only_on_the_first_shot_and_cannot_break_the_filter(kh):
+    kills = [kh.Kill(10, 11), kh.Kill(30, 31)]
+    assert "text='A B'" in kh.shot_fx(1, 6, 12, kills, "A:B'")
+    assert kh.shot_fx(2, 26, 32, kills, "A B").count("drawtext") == 1

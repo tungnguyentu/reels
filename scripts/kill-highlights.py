@@ -46,6 +46,9 @@ PRE_ROLL = 4.0  # the banner appears AFTER the kill; the shot that earned it is 
 POST_ROLL = 2.0
 MERGE_GAP = 2.0  # windows closer than this become one continuous shot -- see windows()
 OUT_W, OUT_H = 1080, 1920
+FONT = Path(__file__).resolve().parent.parent / "reels/assets/RussoOne-Regular.ttf"
+ACCENT = "#FFD400"  # hazard yellow: reads on sky and on foliage, and is not the banner's red
+XFADE_SECONDS = 0.3  # the join between shots; every join eats this much from both neighbours
 MAX_FPS = 60  # keep the source rate up to here; forcing 30 halves a 60fps capture and
 # shows up as judder exactly where a shooter needs it least -- fast camera movement.
 GAME_VOLUME, MUSIC_VOLUME = 0.55, 0.85
@@ -288,9 +291,49 @@ def contact_sheet(video: Path, kills: list[Kill], region, dest: Path, workdir: P
     return dest
 
 
+def shot_fx(index: int, start: float, end: float, kills: list[Kill], title: str | None) -> str:
+    """Filter suffix for one shot: a colour lift, a kill counter, and the title on shot 1.
+
+    The counter sits near the top because TikTok covers the bottom fifth, which is exactly
+    where the kill banner is. A merged streak shows its range ("KILLS 6-8").
+    """
+    first = sum(k.start < start for k in kills) + 1
+    last = max(first, sum(k.start <= end for k in kills))
+    label = f"KILL {first}" if first == last else f"KILLS {first}-{last}"
+    fade = "alpha='min(1,t/0.25)'"
+    face = f"fontfile='{FONT}':fontcolor={ACCENT}:borderw=5:bordercolor=black@0.85:shadowx=4:shadowy=4:shadowcolor=#FF5A00@0.6:x=(w-text_w)/2"
+    out = (",eq=saturation=1.2:contrast=1.06"
+           f",drawtext={face}:text='{label}':fontsize=100:y=230:{fade}")
+    if index == 1 and title:
+        safe = title.replace("\\", "").replace("'", "").replace(":", " ").replace("%", "")
+        out += (f",drawtext={face}:text='{safe}':fontsize=90:y=(h-text_h)/2:"
+                f"alpha='if(lt(t,2.2),min(1,t/0.3),max(0,(2.5-t)/0.3))'")
+    return out
+
+
+def crossfade(segs: list[Path], dest: Path) -> None:
+    """Join shots with a zoom transition. Re-encodes once more, so it costs a generation."""
+    lengths = [float(run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                          "-of", "csv=p=0", str(p)]).strip()) for p in segs]
+    d = XFADE_SECONDS
+    parts, v, a, elapsed = [], "0:v", "0:a", 0.0
+    for k in range(1, len(segs)):
+        elapsed += lengths[k - 1]
+        parts.append(f"[{v}][{k}:v]xfade=transition=zoomin:duration={d}:"
+                     f"offset={elapsed - k * d:.3f}[v{k}]")
+        parts.append(f"[{a}][{k}:a]acrossfade=d={d}[a{k}]")
+        v, a = f"v{k}", f"a{k}"
+    cmd = ["ffmpeg", "-nostdin", "-v", "error"]
+    for p in segs:
+        cmd += ["-i", str(p)]
+    run(cmd + ["-filter_complex", ";".join(parts), "-map", f"[{v}]", "-map", f"[{a}]",
+               "-c:v", "libx264", "-crf", "17", "-preset", "slow", "-pix_fmt", "yuv420p",
+               "-c:a", "aac", "-b:a", "192k", "-ar", "48000", str(dest), "-y"])
+
+
 def build(video: Path, kills: list[Kill], out: Path, music: Path | None,
           pre: float, post: float, workdir: Path, merge_gap: float = MERGE_GAP,
-          layout: str = "blur") -> Path:
+          layout: str = "blur", fx: bool = True, title: str | None = None) -> Path:
     w, h, duration, fps = probe(video)
     crop_w = min(w, round(h * OUT_W / OUT_H))
     crop_w -= crop_w % 2
@@ -315,8 +358,9 @@ def build(video: Path, kills: list[Kill], out: Path, music: Path | None,
     for i, (start, end) in enumerate(spans, 1):
         length = end - start
         seg = segs / f"s_{i:03d}.mp4"
+        seg_vf = vf + (shot_fx(i, start, end, kills, title) if fx else "")
         run(["ffmpeg", "-nostdin", "-v", "error", "-ss", f"{start:.3f}", "-t", f"{length:.3f}",
-             "-i", str(video), "-filter_complex" if layout == "blur" else "-vf", vf,
+             "-i", str(video), "-filter_complex" if layout == "blur" else "-vf", seg_vf,
              "-c:v", "libx264", "-crf", "17", "-preset", "slow", "-pix_fmt", "yuv420p",
              "-r", str(fps), "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
              str(seg), "-y"])
@@ -324,11 +368,14 @@ def build(video: Path, kills: list[Kill], out: Path, music: Path | None,
     if not made:
         sys.exit("no segments produced")
 
-    listing = workdir / "concat.txt"
-    listing.write_text("".join(f"file '{p}'\n" for p in made))
     stitched = workdir / "stitched.mp4"
-    run(["ffmpeg", "-nostdin", "-v", "error", "-f", "concat", "-safe", "0",
-         "-i", str(listing), "-c", "copy", str(stitched), "-y"])
+    if fx and len(made) > 1:
+        crossfade(made, stitched)
+    else:
+        listing = workdir / "concat.txt"
+        listing.write_text("".join(f"file '{p}'\n" for p in made))
+        run(["ffmpeg", "-nostdin", "-v", "error", "-f", "concat", "-safe", "0",
+             "-i", str(listing), "-c", "copy", str(stitched), "-y"])
 
     out.parent.mkdir(parents=True, exist_ok=True)
     if music is None:
@@ -378,6 +425,10 @@ def main() -> int:
     p.add_argument("--layout", choices=("blur", "crop"), default="blur",
                    help="blur: whole frame over a blurred backdrop, sharper (default); "
                         "crop: centre 9:16 slice filling the frame, bigger but upscaled 1.78x")
+    p.add_argument("--fx", action=argparse.BooleanOptionalAction, default=True,
+                   help="zoom transitions between shots, a kill counter and a colour lift "
+                        "(default on; --no-fx for hard cuts and untouched colour)")
+    p.add_argument("--title", default=None, help="text shown over the first shot")
     p.add_argument("--fps", type=float, default=SAMPLE_FPS)
     p.add_argument("--min-edges", type=int, default=None,
                    help="edge count a banner must reach. Left out, the 1080p default of "
@@ -447,7 +498,7 @@ def main() -> int:
         picked = f"-best{args.best}" if args.best else f"-first{args.max_clips}" if args.max_clips else ""
         out = build(args.video, kills,
                     args.out_dir / f"{args.video.stem}-kill-highlights{picked}.mp4",
-                    args.music, args.pre, args.post, workdir, args.merge_gap, args.layout)
+                    args.music, args.pre, args.post, workdir, args.merge_gap, args.layout, args.fx, args.title)
         if args.normalize:
             normalize(out)
         if args.json:
